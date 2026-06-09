@@ -1,5 +1,5 @@
 ﻿<p align="center">
-  <img src="img/icon-new.png" alt="VersePC Logo" width="120">
+  <img src="img/icon.png" alt="VersePC Logo" width="120">
 </p>
 # VersePC - Minecraft Launcher
 
@@ -140,4 +140,5 @@ VersePC/
 <p align="center">
   Made with ❤️ by 豆杰
 </p>
+
 
