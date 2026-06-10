@@ -6445,22 +6445,32 @@ function destroySkinViewer() {
     if (container) container.innerHTML = '';
 }
 
-function initSkinViewer(skinUrl) {
+async function initSkinViewer(skinUrl) {
     destroySkinViewer();
     const container = document.getElementById('skin-3d-container');
     if (!container) return;
     try {
-        const skinModel = (_currentDetailAccount?.skinModel === 'slim') ? 'slim' : 'default';
+        let skinModel = (_currentDetailAccount?.skinModel === 'slim') ? 'slim' : 'default';
+        if (skinUrl) {
+            try {
+                const probe = await fetch(skinUrl.replace(/&_=\d+/, ''), { method: 'HEAD' });
+                const headerModel = probe.headers.get('X-Skin-Model');
+                if (headerModel === 'slim' || headerModel === 'default') skinModel = headerModel;
+            } catch (e) {}
+        }
+        if (_currentDetailAccount) _currentDetailAccount._resolvedSkinModel = skinModel;
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const cw = container.clientWidth || 360;
+        const ch = container.clientHeight || 420;
         _skinViewer = new skinview3d.SkinViewer({
-            canvas: undefined,
-            width: container.clientWidth || 400,
-            height: container.clientHeight || 500,
+            width: cw,
+            height: ch,
             skin: skinUrl || undefined,
             model: skinModel
         });
         container.appendChild(_skinViewer.canvas);
-        _skinViewer.fov = 40;
-        _skinViewer.zoom = 0.65;
+        _skinViewer.fov = 30;
+        _skinViewer.zoom = 0.85;
         _skinViewer.autoRotate = true;
         _skinViewer.autoRotateSpeed = 0.5;
         _skinViewer.animation = new skinview3d.IdleAnimation();
@@ -6494,7 +6504,13 @@ async function detailRefreshSkin() {
     if (!accUuid) { showToast('无UUID', 'error'); return; }
     const skinUrl = `/api/skin-texture?uuid=${accUuid}${acc.serverUrl ? '&serverUrl=' + encodeURIComponent(acc.serverUrl) : ''}${acc.username ? '&username=' + encodeURIComponent(acc.username) : ''}&_=${Date.now()}`;
     try {
-        const skinModel = (_currentDetailAccount?.skinModel === 'slim') ? 'slim' : 'default';
+        let skinModel = (_currentDetailAccount?.skinModel === 'slim') ? 'slim' : 'default';
+        try {
+            const probe = await fetch(skinUrl.replace(/&_=\d+/, ''), { method: 'HEAD' });
+            const headerModel = probe.headers.get('X-Skin-Model');
+            if (headerModel === 'slim' || headerModel === 'default') skinModel = headerModel;
+        } catch (e) {}
+        _currentDetailAccount._resolvedSkinModel = skinModel;
         await _skinViewer.loadSkin(skinUrl, { model: skinModel });
         _refreshAccountAvatars();
         showToast('皮肤已刷新', 'success');

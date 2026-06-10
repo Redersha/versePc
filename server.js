@@ -361,6 +361,42 @@ async function fetchSkinFromSessionServer(uuid, serverUrl) {
     return null;
 }
 
+async function fetchSkinModelFromSessionServer(uuid, serverUrl) {
+    try {
+        const cleanUuid = uuid.replace(/-/g, '');
+        const dashedUuid = uuid.length === 32
+            ? `${uuid.slice(0,8)}-${uuid.slice(8,12)}-${uuid.slice(12,16)}-${uuid.slice(16,20)}-${uuid.slice(20)}`
+            : uuid;
+
+        let profileData = null;
+        if (serverUrl) {
+            try {
+                let apiUrl = cleanServerUrl(serverUrl);
+                const profileUrl = `${apiUrl}/sessionserver/session/minecraft/profile/${dashedUuid}`;
+                profileData = await fetchJSON(profileUrl);
+            } catch (e) {}
+        }
+        if (!profileData) {
+            try {
+                const mojangUrl = `https://sessionserver.mojang.com/session/minecraft/profile/${dashedUuid}`;
+                profileData = await fetchJSON(mojangUrl);
+            } catch (e) {}
+        }
+        if (profileData && profileData.properties) {
+            const texturesProp = profileData.properties.find(p => p.name === 'textures');
+            if (texturesProp) {
+                const decoded = JSON.parse(Buffer.from(texturesProp.value, 'base64').toString('utf8'));
+                if (decoded.textures && decoded.textures.SKIN) {
+                    const meta = decoded.textures.SKIN.metadata;
+                    if (meta && meta.model === 'slim') return 'slim';
+                    return 'default';
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
 const AVATAR_CACHE = new Map();
 const AVATAR_CACHE_DURATION = 30 * 60 * 1000; // 30分钟（过期后后台异步刷新，但仍用旧缓存响应）
 const VERSION_ICON_CACHE = new Map();
@@ -530,7 +566,7 @@ async function fetchAvatarData(cleanUuid, avatarServerUrl, avatarUsername, store
         } catch (e) {}
     }
 
-    if (!avatarServerUrl) {
+    if (!avatarData && !avatarServerUrl) {
         const serviceResults = await Promise.allSettled(
             AVATAR_SERVICES.map(async (serviceFn) => {
                 const tryUrl = serviceFn(cleanUuid);
@@ -555,7 +591,7 @@ async function fetchAvatarData(cleanUuid, avatarServerUrl, avatarUsername, store
                 break;
             }
         }
-    } else {
+    } else if (avatarServerUrl) {
         console.log('[Avatar] 外置认证，跳过公共Avatar服务，直连 ' + avatarServerUrl);
     }
 
@@ -10381,8 +10417,8 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
                     const task = forgeLibTasks[idx];
                     const { lib, libPath, parts } = task;
 
-                    if (onProgress && forgeLibDone % 5 === 0) {
-                        onProgress(0.10 + (forgeLibDone / totalForgeLibs) * 0.30, `正在下载Forge库文件 (${forgeLibDone}/${forgeLibTasks.length})`);
+                    if (onProgress) {
+                        onProgress(0.10 + (forgeLibDone / totalForgeLibs) * 0.30, `正在下载Forge库文件 (${forgeLibDone + 1}/${forgeLibTasks.length})`);
                     }
 
                     if (lib.downloads?.artifact?.url) {
@@ -12586,7 +12622,7 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
         fs.mkdirSync(versionDir, { recursive: true });
     }
 
-    const cfApiKey = settings.curseforgeApiKey || '';
+    const cfApiKey = settings.curseforgeApiKey || '$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm';
 
     if (isNewVersionDirCF) {
         console.log(`[CurseForge] 确保基础版本存在: ${mcVersion}`);
@@ -13586,8 +13622,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     } else if (source === 'curseforge') {
                         const gameId = '432';
                         const settings = loadSettingsCached();
-                        const cfApiKey = settings.curseforgeApiKey || '';
-                        const cfHeaders = cfApiKey ? { 'x-api-key': cfApiKey } : {};
+                        const cfApiKey = settings.curseforgeApiKey || '$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm';
+                        const cfHeaders = { 'x-api-key': cfApiKey };
                         let searchUrl = `${CURSEFORGE_API}/mods/search?gameId=${gameId}&searchFilter=${encodeURIComponent(query)}&sortOrder=Desc&pageSize=${limit}&index=${offset}`;
                         if (sort === 'downloads') searchUrl += '&sortField=TotalDownloads';
                         else if (sort === 'newest') searchUrl += '&sortField=dateReleased';
@@ -13686,7 +13722,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         }
                     } else if (source === 'curseforge') {
                         const settings = loadSettingsCached();
-                        const cfApiKey = settings.curseforgeApiKey || '';
+                        const cfApiKey = settings.curseforgeApiKey || '$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm';
                         let loaderType = 4;
                         if (loader === 'forge') loaderType = 1;
                         else if (loader === 'neoforge') loaderType = 5;
@@ -16966,11 +17002,18 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 const stCacheKey = `skin:${stClean}:${stServerUrl}:${stUsername}`;
                 const stCached = AVATAR_CACHE.get(stCacheKey);
                 let stSkinModel = 'default';
+                let stHasStoredModel = false;
                 try {
                     const stAccounts = loadAccounts();
                     const stAcc = stAccounts.find(a => (a.uuid || '').replace(/-/g, '') === stClean);
-                    if (stAcc && stAcc.skinModel) stSkinModel = stAcc.skinModel;
+                    if (stAcc && stAcc.skinModel) { stSkinModel = stAcc.skinModel; stHasStoredModel = true; }
                 } catch (e) {}
+                if (!stHasStoredModel) {
+                    try {
+                        const detected = await fetchSkinModelFromSessionServer(stClean, stServerUrl || null);
+                        if (detected) stSkinModel = detected;
+                    } catch (e) {}
+                }
                 const serveStImage = (data, ct) => {
                     res.writeHead(200, { 'Content-Type': ct || 'image/png', 'Cache-Control': 'public, max-age=86400', 'X-Skin-Model': stSkinModel });
                     res.end(data);

@@ -2,12 +2,12 @@
   "version": "1.1.0",
   "releaseDate": "2026-06-11T00:00:00Z",
   "releaseName": "VersePC v1.1.0",
-  "releaseNotes": "## 更新内容\n- 全景场景改为纯自动旋转，移除鼠标跟随（避免头晕），新增转速自由调节（1-20档）\n- 修复整合包下载后启动提示缺少文件（补全 assets 下载和客户端 JAR 验证）\n- 修复 PCL2 整合包不显示 mod（新增 NeoForge mods.toml 支持）\n- 修复多次快速启动导致崩溃（前端+后端双层防抖锁）\n- Java 缺失时不再自动下载，改为提示用户手动配置\n- 修复游戏窗口大小调节没效果（参考 PCL2，分辨率通过命令行参数传递）\n- 修复 C 盘创建无用文件夹和空文件夹占空间问题\n- 修复 MCBBS 链接打不开（更新为 mcbbs.co）\n- 修复准星设置保存失效（启动器不再覆盖 options.txt 中的准星设置）",
+  "releaseNotes": "## 更新内容\n- 全景场景改为纯自动旋转，移除鼠标跟随（避免头晕），新增转速自由调节（1-20档）\n- 修复整合包导入后 Mod 下载错误（内建 CurseForge API Key 兜底）\n- 修复整合包下载后启动提示缺少文件（补全 assets 下载和客户端 JAR 验证）\n- 修复 PCL2 整合包不显示 mod（新增 NeoForge mods.toml 支持）\n- 修复多次快速启动导致崩溃（前端+后端双层防抖锁）\n- Java 缺失时不再自动下载，改为提示用户手动配置\n- 修复游戏窗口大小调节没效果（分辨率通过命令行参数传递）\n- 修复 Forge 库下载进度条卡住（改为每个文件实时更新进度）\n- 修复 C 盘创建无用文件夹和空文件夹占空间问题\n- 修复 MCBBS 链接打不开（更新为 mcbbs.co）\n- 修复正版登录头像不显示（补全 session server 回退）\n- 修复 3D 皮肤模型缩放问题（调整视角和缩放参数）\n- 修复细胳膊（slim）皮肤模型未正确识别",
   "files": {
     "win-x64": {
       "url": "https://github.com/doujie081231/versePc/releases/download/v1.1.0/VersePC-Setup-1.1.0.exe",
-      "sha256": "c86e5913a341afecc545932effba54f03f9320fe08bcfdaa162e6fdcf84f3449",
-      "size": 162787862
+      "sha256": "6f88805875f062b5743404e8a6c55fdf5af3d5f851e57be96b4205e4ac1cd5dc",
+      "size": 162788161
     }
   },
   "minSupportedVersion": "1.0.0",
