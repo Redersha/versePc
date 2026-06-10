@@ -1222,10 +1222,16 @@ function isTerracottaInstalled() {
 
 async function ensureTerracottaInstalled() {
     if (isTerracottaInstalled()) return true;
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+    const isLinux = process.platform === 'linux';
+    const arch = process.arch === 'arm64' ? (isMac ? 'macos-arm64' : 'linux-arm64') : (isWin ? 'windows-x86_64' : (isMac ? 'macos-arm64' : 'linux-x86_64'));
+    const pkgName = `terracotta-${TERRACOTTA_VERSION}-${arch}-pkg.tar.gz`;
+    const exeName = isWin ? 'terracotta.exe' : 'terracotta';
     const TERRACOTTA_URLS = [
-        'https://terracotta.glavo.site/download/latest/terracotta.exe',
-        'https://ghfast.top/https://github.com/HMCL-dev/HMCL/releases/download/terracotta-v0.4.2/terracotta.exe',
-        'https://mirror.ghproxy.com/https://github.com/HMCL-dev/HMCL/releases/download/terracotta-v0.4.2/terracotta.exe'
+        `https://github.com/burningtnt/Terracotta/releases/download/v${TERRACOTTA_VERSION}/${pkgName}`,
+        `https://ghfast.top/https://github.com/burningtnt/Terracotta/releases/download/v${TERRACOTTA_VERSION}/${pkgName}`,
+        `https://mirror.ghproxy.com/https://github.com/burningtnt/Terracotta/releases/download/v${TERRACOTTA_VERSION}/${pkgName}`
     ];
     const binPath = getTerracottaBinaryPath();
     const binDir = path.dirname(binPath);
@@ -1234,16 +1240,50 @@ async function ensureTerracottaInstalled() {
         try {
             console.log(`[Terracotta] Downloading from ${url}...`);
             const resp = await fetch(url);
-            if (!resp.ok) continue;
+            if (!resp.ok) { console.warn(`[Terracotta] HTTP ${resp.status} from ${url}`); continue; }
             const buffer = Buffer.from(await resp.arrayBuffer());
-            if (buffer.length < 10000) continue;
+            if (buffer.length < 10000) { console.warn(`[Terracotta] Response too small (${buffer.length} bytes)`); continue; }
+            const { execFile } = require('child_process');
+            const tmpDir = path.join(binDir, '_tmp_extract');
+            if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+            fs.mkdirSync(tmpDir, { recursive: true });
+            const tmpArchive = path.join(tmpDir, 'pkg.tar.gz');
+            fs.writeFileSync(tmpArchive, buffer);
+            try {
+                await new Promise((resolve, reject) => {
+                    execFile('tar', ['-xzf', tmpArchive, '-C', tmpDir], { timeout: 30000 }, (err) => {
+                        if (err) reject(err); else resolve();
+                    });
+                });
+                let extracted = null;
+                const findExe = (dir) => {
+                    for (const f of fs.readdirSync(dir)) {
+                        const fp = path.join(dir, f);
+                        if (fs.statSync(fp).isDirectory()) { findExe(fp); }
+                        else if (f === exeName || f === 'terracotta' || f === 'terracotta.exe') { extracted = fp; }
+                    }
+                };
+                findExe(tmpDir);
+                if (extracted) {
+                    fs.copyFileSync(extracted, binPath);
+                    if (!isWin) fs.chmodSync(binPath, 0o755);
+                    console.log(`[Terracotta] Installed successfully from tar.gz (${buffer.length} bytes)`);
+                    fs.rmSync(tmpDir, { recursive: true, force: true });
+                    return true;
+                }
+            } catch (te) {
+                console.warn(`[Terracotta] tar extract failed: ${te.message}, trying raw write...`);
+            }
+            if (buffer.length > 500000) {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+                continue;
+            }
             const tmpPath = binPath + '.tmp';
             fs.writeFileSync(tmpPath, buffer);
             fs.renameSync(tmpPath, binPath);
-            if (process.platform !== 'win32') {
-                fs.chmodSync(binPath, 0o755);
-            }
+            if (!isWin) fs.chmodSync(binPath, 0o755);
             console.log(`[Terracotta] Installed successfully (${buffer.length} bytes)`);
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
             return true;
         } catch (e) {
             console.warn(`[Terracotta] Download failed from ${url}: ${e.message}`);
@@ -1304,20 +1344,38 @@ async function terracottaHttpGet(endpoint, params = {}) {
     });
 }
 
-function waitForTerracottaPort(filePath, timeout) {
+function waitForTerracottaPort(filePath, timeout, processRef) {
     return new Promise((resolve, reject) => {
+        let settled = false;
         const startTime = Date.now();
+        const onProcessError = (err) => {
+            if (!settled) { settled = true; reject(new Error('Terracotta进程启动失败: ' + err.message)); }
+        };
+        const onProcessClose = (code) => {
+            if (!settled && code !== 0 && code !== null) { settled = true; reject(new Error(`Terracotta进程异常退出 (code ${code})`)); }
+        };
+        if (processRef) {
+            processRef.on('error', onProcessError);
+            processRef.on('close', onProcessClose);
+        }
         const check = () => {
+            if (settled) return;
             if (fs.existsSync(filePath)) {
                 try {
                     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
                     if (data.port) {
+                        settled = true;
+                        if (processRef) {
+                            processRef.removeListener('error', onProcessError);
+                            processRef.removeListener('close', onProcessClose);
+                        }
                         resolve(data.port);
                         return;
                     }
                 } catch (e) {}
             }
             if (Date.now() - startTime > timeout) {
+                settled = true;
                 reject(new Error('Terracotta启动超时'));
                 return;
             }
@@ -1385,7 +1443,7 @@ async function startTerracotta() {
     });
 
     try {
-        const port = await waitForTerracottaPort(terracottaPortFilePath, 30000);
+        const port = await waitForTerracottaPort(terracottaPortFilePath, 30000, terracottaProcess);
         terracottaHttpPort = port;
         terracottaStatus.running = true;
         console.log(`[Terracotta] HTTP API listening on port ${port}`);
@@ -1426,7 +1484,12 @@ async function terracottaStartHost(gamePort) {
         game_port: gamePort
     };
 
-    await terracottaHttpGet('/state/scanning', params);
+    try {
+        await terracottaHttpGet('/state/scanning', params);
+    } catch (e) {
+        stopTerracotta();
+        throw e;
+    }
 
     _terracottaSavedMode = 'host';
     _terracottaSavedGamePort = gamePort;
@@ -1449,7 +1512,12 @@ async function terracottaStartGuest(roomCode) {
         public_nodes: nodes
     };
 
-    await terracottaHttpGet('/state/guesting', params);
+    try {
+        await terracottaHttpGet('/state/guesting', params);
+    } catch (e) {
+        stopTerracotta();
+        throw e;
+    }
 
     _terracottaSavedMode = 'guest';
     _terracottaSavedRoomCode = roomCode;

@@ -163,8 +163,10 @@ async function apiGet(path, params = {}) {
     try {
         const res = await fetchWithTimeout(url);
         if (!res.ok) {
-            if (res.status >= 500) throw new ServerError(`HTTP ${res.status}`, res.status);
-            if (res.status >= 400) throw new ClientError(`HTTP ${res.status}`, res.status);
+            let errMsg = `HTTP ${res.status}`;
+            try { const body = await res.json(); if (body.error) errMsg = body.error; } catch (e) {}
+            if (res.status >= 500) throw new ServerError(errMsg, res.status);
+            if (res.status >= 400) throw new ClientError(errMsg, res.status);
         }
         return await res.json();
     } catch (e) {
@@ -183,8 +185,10 @@ async function apiPost(path, data = {}) {
             body: JSON.stringify(data)
         });
         if (!res.ok) {
-            if (res.status >= 500) throw new ServerError(`HTTP ${res.status}`, res.status);
-            if (res.status >= 400) throw new ClientError(`HTTP ${res.status}`, res.status);
+            let errMsg = `HTTP ${res.status}`;
+            try { const body = await res.json(); if (body.error) errMsg = body.error; } catch (e) {}
+            if (res.status >= 500) throw new ServerError(errMsg, res.status);
+            if (res.status >= 400) throw new ClientError(errMsg, res.status);
         }
         return await res.json();
     } catch (e) {
@@ -203,8 +207,10 @@ async function apiDelete(path, data = {}) {
             body: JSON.stringify(data)
         });
         if (!res.ok) {
-            if (res.status >= 500) throw new ServerError(`HTTP ${res.status}`, res.status);
-            if (res.status >= 400) throw new ClientError(`HTTP ${res.status}`, res.status);
+            let errMsg = `HTTP ${res.status}`;
+            try { const body = await res.json(); if (body.error) errMsg = body.error; } catch (e) {}
+            if (res.status >= 500) throw new ServerError(errMsg, res.status);
+            if (res.status >= 400) throw new ClientError(errMsg, res.status);
         }
         return await res.json();
     } catch (e) {
