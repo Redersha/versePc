@@ -2228,7 +2228,7 @@ function renderVersions() {
             const externalBadgeHtml = v.isExternal ? '<span style="display:inline-block;background:rgba(255,165,0,0.15);color:#ffa500;font-size:10px;padding:1px 6px;border-radius:4px;margin-left:6px">外部文件夹</span>' : '';
             const externalPathHtml = v.isExternal && v.externalPath ? `<span style="color:var(--text-muted);font-size:11px;margin-left:4px" title="${escapeHtml(v.externalPath)}">${escapeHtml(v.externalPath)}</span>` : '';
             const displayName = v.isExternal ? (v.customName || v.id.replace(' [外部]', '')) : (v.customName || v.id);
-            const deleteBtnHtml = v.isExternal ? '' : `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteVersion('${escapeOnclick(v.id)}')">删除</button>`;
+            const deleteBtnHtml = `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteVersion('${escapeOnclick(v.id)}')">${v.isExternal ? '移除' : '删除'}</button>`;
             return `<div class="version-item version-item-clickable" 
                 data-version-id="${escapeHtml(v.id)}" 
                 data-version-url="" 
@@ -2785,8 +2785,15 @@ function getStageText(stage) {
 }
 
 async function deleteVersion(versionId) {
-    if (versionId.includes('[外部]')) {
-        showToast('外部文件夹版本请通过管理外部文件夹移除', 'error');
+    const isExternal = versionId.includes('[外部]');
+    if (isExternal) {
+        const confirmed = await showConfirmDialog('移除外部版本', `确定要从列表中移除 ${versionId} 吗？\n（不会删除实际游戏文件）`, '移除', '取消');
+        if (!confirmed) return;
+        try {
+            await API.deleteVersion(versionId);
+            showToast(`已移除 ${versionId}`, 'success');
+            await loadVersions();
+        } catch (e) { showToast('移除失败', 'error'); }
         return;
     }
     const confirmed = await showConfirmDialog('删除版本', `确定要删除版本 ${versionId} 吗？`, '删除', '取消');
@@ -9225,7 +9232,10 @@ async function deleteCurrentVersion() {
         showToast('未找到版本信息', 'error');
         return;
     }
-    const confirmed = await showConfirmDialog('删除版本', '确定要删除此版本吗？此操作不可撤销！', '删除', '取消');
+    const isExternal = currentSettingsVersionId.includes('[外部]');
+    const msg = isExternal ? '确定要从列表中移除此外部版本吗？（不会删除实际游戏文件）' : '确定要删除此版本吗？此操作不可撤销！';
+    const btnText = isExternal ? '移除' : '删除';
+    const confirmed = await showConfirmDialog(isExternal ? '移除外部版本' : '删除版本', msg, btnText, '取消');
     if (!confirmed) return;
     try {
         const r = await API.deleteVersion(currentSettingsVersionId);

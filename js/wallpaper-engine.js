@@ -337,14 +337,14 @@ class PanoramaRenderer {
     render(dt, timestamp) {
         if (!this.threeRenderer || !this.cube) return;
         const clampedDt = Math.min(dt, 100);
-        this.autoRotation += this.ROTATION_SPEED * clampedDt * 0.001;
+        this.autoRotation += this.ROTATION_SPEED * clampedDt * 0.06;
         this.cube.rotation.y = this.autoRotation;
         this.cube.rotation.x = 0;
         this.threeRenderer.render(this.threeScene, this.threeCamera);
     }
 
     setRotationSpeed(speed) {
-        this.ROTATION_SPEED = speed * 0.15;
+        this.ROTATION_SPEED = speed;
     }
 
     destroy() {
