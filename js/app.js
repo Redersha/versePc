@@ -1522,7 +1522,7 @@ function setupModBrowse() {
         loadMods();
     });
     if (modSearchInput) modSearchInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.isComposing) {
             modSearchQuery = e.target.value.trim();
             modSearchOffset = 0;
             loadMods();
@@ -3786,7 +3786,7 @@ function setupFavSearchListeners() {
     }
     if (searchInput) {
         searchInput.addEventListener('keyup', function(e) {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.isComposing) {
                 _favSearchQuery = e.target.value;
                 renderFavPage();
             }
@@ -4692,6 +4692,7 @@ function showModpackInstallModal(fileName, sessionId) {
     dlManager.add(taskId, fileName || '整合包安装', 'modpack', sessionId, iconUrl);
     navigateToPage('downloads');
 
+    let unknownRetries = 0;
     const poll = async () => {
         try {
             const data = await API.getModDownloadStatus(sessionId);
@@ -4700,10 +4701,12 @@ function showModpackInstallModal(fileName, sessionId) {
                 status: f.status || 'pending',
                 size: f.size ? formatSize(f.size) : ''
             }));
+            const displayStatus = data.status === 'completed' ? 'completed' : data.status === 'failed' ? 'failed' : data.status === 'cancelled' ? 'failed' : 'downloading';
+            const displayMessage = data.phase === 'importing' ? '正在安装整合包...' : getDownloadStageText(data);
             dlManager.update(taskId, {
                 progress: data.progress || 0,
-                status: data.status === 'completed' ? 'completed' : data.status === 'failed' ? 'failed' : data.status === 'cancelled' ? 'failed' : 'downloading',
-                message: getDownloadStageText(data),
+                status: displayStatus,
+                message: displayMessage,
                 files: files
             });
             if (data.status === 'completed') {
@@ -4719,7 +4722,18 @@ function showModpackInstallModal(fileName, sessionId) {
                 dlManager.update(taskId, { status: 'failed', message: '已取消' });
                 return;
             }
+            if (data.phase === 'importing') {
+                const timer = setTimeout(poll, 500);
+                modDownloadPollTimers.push(timer);
+                return;
+            }
             if (data.status === 'unknown' || !data.status) {
+                unknownRetries++;
+                if (unknownRetries <= 1) {
+                    const timer = setTimeout(poll, 3000);
+                    modDownloadPollTimers.push(timer);
+                    return;
+                }
                 dlManager.update(taskId, { status: 'failed', message: '会话已失效' });
                 return;
             }
@@ -4745,6 +4759,7 @@ function getDownloadStageText(data) {
         'download-mods':   '下载整合包模组...',
         'overrides':       '解压整合包配置...',
         'install':         '安装整合包内容...',
+        'importing':       '正在安装整合包...',
     };
     if (data.phase && phaseMap[data.phase]) return phaseMap[data.phase];
     if (data.phase === 'install') return '安装整合包内容...';
@@ -5155,6 +5170,7 @@ function showModDownloadModal(fileName, sessionId, savePath) {
     modDownloadPollTimers.forEach(t => clearTimeout(t));
     modDownloadPollTimers = [];
 
+    let unknownRetries = 0;
     const poll = async () => {
         try {
             const data = await API.getModDownloadStatus(sessionId);
@@ -5173,6 +5189,12 @@ function showModDownloadModal(fileName, sessionId, savePath) {
                 return;
             }
             if (data.status === 'unknown' || !data.status) {
+                unknownRetries++;
+                if (unknownRetries <= 1) {
+                    const timer = setTimeout(poll, 3000);
+                    modDownloadPollTimers.push(timer);
+                    return;
+                }
                 dlManager.update(taskId, { status: 'failed', message: '会话已失效' });
                 return;
             }
@@ -6711,7 +6733,12 @@ async function handleSkinUpload(input) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('accountId', _currentDetailAccount.id);
-        formData.append('model', 'default');
+        const modelSelect = document.getElementById('skin-model-select') || document.querySelector('input[name="skin-model"]:checked');
+        let modelValue = 'default';
+        if (modelSelect) {
+            modelValue = modelSelect.value || modelSelect.getAttribute('data-model') || 'default';
+        }
+        formData.append('model', modelValue);
         const resp = await fetch('/api/upload-skin', { method: 'POST', body: formData });
         const text = await resp.text();
         let result;
@@ -7865,18 +7892,20 @@ function appendConsoleLine(text, type = '') {
 
 async function detectJava() {
     const hint = document.getElementById('java-detect-result');
-    hint.textContent = '检测中...';
+    if (hint) hint.textContent = '检测中...';
     try {
         const result = await API.detectJava();
         if (result.javaList && result.javaList.length > 0) {
             const best = result.javaList.find(j => j.majorVersion >= 17) || result.javaList[0];
-            document.getElementById('setting-java-path').value = best.path;
-            hint.textContent = `找到 Java ${best.version} (${best.is64Bit ? '64位' : '32位'})`;
-            document.getElementById('stat-java').textContent = best.majorVersion;
+            const javaPathInput = document.getElementById('setting-java-path');
+            if (javaPathInput) javaPathInput.value = best.path;
+            if (hint) hint.textContent = `找到 Java ${best.version} (${best.is64Bit ? '64位' : '32位'})`;
+            const statJava = document.getElementById('stat-java');
+            if (statJava) statJava.textContent = best.majorVersion;
         } else {
-            hint.textContent = '未检测到Java，请手动配置或安装';
+            if (hint) hint.textContent = '未检测到Java，请手动配置或安装';
         }
-    } catch (e) { hint.textContent = '检测失败'; }
+    } catch (e) { if (hint) hint.textContent = '检测失败'; }
 }
 
 let javaInstallPollTimer = null;
@@ -8435,7 +8464,7 @@ function setupResourceEvents(type) {
     if (searchInput && !searchInput._bound) {
         searchInput._bound = true;
         searchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.isComposing) {
                 resourceState[type].query = searchInput.value.trim();
                 resourceState[type].offset = 0;
                 loadResourceList(type);

@@ -60,6 +60,7 @@ class WallpaperEngine {
         this._onResize = this._onResize.bind(this);
         this._onMouseMove = this._onMouseMove.bind(this);
         this._animate = this._animate.bind(this);
+        this._savedRotationSpeed = 0.005;
     }
 
     start() {
@@ -151,6 +152,9 @@ class WallpaperEngine {
         this.renderer = (factories[this.currentMode] || factories.panorama)();
 
         if (this.currentMode === 'panorama') {
+            if (this.renderer && this.renderer.setRotationSpeed) {
+                this.renderer.setRotationSpeed(this._savedRotationSpeed);
+            }
             this._notifyBrightness(0.5);
         }
     }
@@ -632,6 +636,7 @@ function onWallpaperBrightnessChange(callback) {
 }
 
 function setPanoramaRotationSpeed(speed) {
+    if (wallpaperEngine) wallpaperEngine._savedRotationSpeed = speed;
     if (wallpaperEngine && wallpaperEngine.renderer instanceof PanoramaRenderer) {
         wallpaperEngine.renderer.setRotationSpeed(speed);
     }

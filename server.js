@@ -4142,7 +4142,7 @@ function getMirrorUrl(originalUrl) {
     return urls.length > 1 ? urls[1] : originalUrl;
 }
 
-async function downloadFileWithMirror(urlStr, destPath, onProgress, retries = 3, abortSignal = null) {
+async function downloadFileWithMirror(urlStr, destPath, onProgress, retries = 3, abortSignal = null, customTimeout = null) {
     const allUrls = getMirrorUrls(urlStr);
 
     try {
@@ -4160,12 +4160,14 @@ async function downloadFileWithMirror(urlStr, destPath, onProgress, retries = 3,
 
     const isSmallAsset = (destPath.includes('/assets/') || destPath.includes('\\assets\\')) && !destPath.endsWith('.jar');
     if (isSmallAsset) {
-        return _dlSingle(urlStr, destPath, { onProgress, retries, abortSignal, timeout: 30000, stallTimeout: 15000 });
+        return _dlSingle(urlStr, destPath, { onProgress, retries, abortSignal, timeout: customTimeout || 30000, stallTimeout: 15000 });
     }
 
     if (!NO_CHUNK_HOSTS.some(d => urlStr.includes(d))) {
         try {
-            const result = await downloadFileChunked(urlStr, destPath, { onProgress, retries, mirrors: allUrls, abortSignal });
+            const chunkOpts = { onProgress, retries, mirrors: allUrls, abortSignal };
+            if (customTimeout) chunkOpts.timeout = customTimeout;
+            const result = await downloadFileChunked(urlStr, destPath, chunkOpts);
             if (destPath.endsWith('.jar') && !isJarIntact(destPath)) {
                 console.log(`[Mirror] Chunked下载后JAR损坏 (${path.basename(destPath)}), 回退顺序下载`);
                 await fs.promises.unlink(destPath).catch(() => {});
@@ -8956,9 +8958,15 @@ async function launchGame(versionId, settings, account) {
                 const mcVer = forgeMatch[1];
                 const forgeVer = forgeMatch[2];
                 console.log(`[LaunchGame] 尝试重新安装Forge ${mcVer}-${forgeVer}来修复核心文件`);
-                const repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
+                let repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
                     console.log(`[LaunchGame] 修复进度: ${Math.round(p * 100)}% - ${msg || ''}`);
                 });
+                if (!repairResult.success) {
+                    console.log(`[LaunchGame] 主源修复失败，尝试BMCLAPI镜像...`);
+                    repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
+                        console.log(`[LaunchGame] BMCLAPI镜像修复进度: ${Math.round(p * 100)}% - ${msg || ''}`);
+                    }, 'https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge');
+                }
                 if (repairResult.success) {
                     const stillMissing = (depCheck.forgeCore.missing || []).filter(m => !fs.existsSync(m.path));
                     if (stillMissing.length === 0) {
@@ -9095,9 +9103,15 @@ async function launchGame(versionId, settings, account) {
                 const forgeVer = forgeMatch[2];
                 console.log(`[LaunchGame] 兜底修复: 重新安装Forge ${mcVer}-${forgeVer}`);
                 try {
-                    const repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
+                    let repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
                         console.log(`[LaunchGame] 兜底修复进度: ${Math.round(p * 100)}%`);
                     });
+                    if (!repairResult.success) {
+                        console.log(`[LaunchGame] 兜底修复主源失败，尝试BMCLAPI镜像...`);
+                        repairResult = await installForge(mcVer, forgeVer, (p, msg) => {
+                            console.log(`[LaunchGame] 兜底BMCLAPI修复进度: ${Math.round(p * 100)}%`);
+                        }, 'https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge');
+                    }
                     if (repairResult.success) {
                         const stillMissing = forgeSafeMissing.filter(f => !fs.existsSync(f.path) || !isJarIntact(f.path));
                         if (stillMissing.length === 0) {
@@ -10264,8 +10278,16 @@ async function verifyImportLibs(versionId, progress, abortSignal) {
     const mergedJson = resolveVersionJson(versionId);
     const allLibs = mergedJson ? (mergedJson.libraries || []) : [];
     const currentPlatform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux';
-    let libChecked = 0, libMissing = 0;
-    const missingLibFiles = [];
+    let libChecked = 0, coreLibMissing = 0, nonCoreLibMissing = 0;
+    const coreMissingLibFiles = [];
+    const nonCoreMissingLibFiles = [];
+    const CORE_PREFIXES = ['net.minecraftforge', 'cpw.mods', 'net.minecraft'];
+
+    function isCoreLibrary(libName) {
+        if (!libName) return false;
+        const pkg = libName.split(':')[0];
+        return CORE_PREFIXES.some(p => pkg.startsWith(p));
+    }
 
     for (const lib of allLibs) {
         if (lib.rules && !evaluateRules(lib.rules)) continue;
@@ -10293,7 +10315,6 @@ async function verifyImportLibs(versionId, progress, abortSignal) {
             }
         }
         if (libPath && (!libPath.endsWith('.jar') ? !fs.existsSync(libPath) : !isJarIntact(libPath))) {
-            libMissing++;
             let dlUrl = lib.downloads?.artifact?.url || '';
             if (!dlUrl && lib.name) {
                 const p = lib.name.split(':');
@@ -10306,31 +10327,57 @@ async function verifyImportLibs(versionId, progress, abortSignal) {
                     dlUrl = `${base}${mg}/${p[1]}/${p[2]}/${jn}`;
                 }
             }
-            missingLibFiles.push({
+            const libEntry = {
                 type: 'library', url: dlUrl || '', path: libPath,
                 sha1: lib.downloads?.artifact?.sha1 || '',
                 size: lib.downloads?.artifact?.size || 0,
                 name: lib.name || path.basename(libPath)
-            });
+            };
+            if (isCoreLibrary(lib.name)) {
+                coreLibMissing++;
+                coreMissingLibFiles.push(libEntry);
+            } else {
+                nonCoreLibMissing++;
+                nonCoreMissingLibFiles.push(libEntry);
+            }
         }
     }
-    console.log(`[verifyImport] ${versionId}: 检查${libChecked}个库, 缺失${libMissing}个`);
-    if (libMissing > 0) {
-        if (progress) progress('verify', `正在补全 ${libMissing} 个缺失库文件...`, 91, [], '');
-        const dlResult = await downloadMissingDependencies(missingLibFiles, (p) => {
+    console.log(`[verifyImport] ${versionId}: 检查${libChecked}个库, 核心缺失${coreLibMissing}个, 非核心缺失${nonCoreLibMissing}个`);
+
+    if (coreLibMissing > 0) {
+        if (progress) progress('verify', `正在补全 ${coreLibMissing} 个核心缺失库文件...`, 91, [], '');
+        const dlResult = await downloadMissingDependencies(coreMissingLibFiles, (p) => {
             if (progress && p.progress !== undefined) {
                 const pct = 91 + Math.round((p.progress / 100) * 6);
-                progress('verify', `补全依赖 (${(p.completed || 0) + (p.failed || 0)}/${libMissing})`, Math.min(pct, 97), [], '');
+                progress('verify', `补全核心依赖 (${(p.completed || 0) + (p.failed || 0)}/${coreLibMissing})`, Math.min(pct, 97), [], '');
             }
         });
-        console.log(`[verifyImport] 补全结果: ${dlResult.completed}成功 ${dlResult.failed}失败`);
-        return { ok: dlResult.failed === 0, checked: libChecked, missing: dlResult.failed };
+        console.log(`[verifyImport] 核心库补全结果: ${dlResult.completed}成功 ${dlResult.failed}失败`);
+        if (dlResult.failed > 0) {
+            return { ok: false, checked: libChecked, missing: dlResult.failed };
+        }
     }
+
+    if (nonCoreLibMissing > 0) {
+        if (progress) progress('verify', `正在补全 ${nonCoreLibMissing} 个非核心缺失库文件...`, 91, [], '');
+        const dlResult = await downloadMissingDependencies(nonCoreMissingLibFiles, (p) => {
+            if (progress && p.progress !== undefined) {
+                const pct = 91 + Math.round((p.progress / 100) * 6);
+                progress('verify', `补全非核心依赖 (${(p.completed || 0) + (p.failed || 0)}/${nonCoreLibMissing})`, Math.min(pct, 97), [], '');
+            }
+        });
+        console.log(`[verifyImport] 非核心库补全结果: ${dlResult.completed}成功 ${dlResult.failed}失败`);
+        if (dlResult.failed > 0) {
+            if (progress) progress('verify', `警告: ${dlResult.failed} 个非核心库补全失败，将继续导入`, 93, [], '');
+            return { ok: true, checked: libChecked, missing: dlResult.failed, warning: `${dlResult.failed} 个非核心库文件缺失（如 org.apache、com.google 等），导入将继续但可能影响部分功能` };
+        }
+    }
+
     if (progress) progress('verify', '完整性检查通过', 93, [], '');
     return { ok: true, checked: libChecked, missing: 0 };
 }
 
-async function installForge(gameVersion, forgeVersion, onProgress = null) {
+async function installForge(gameVersion, forgeVersion, onProgress = null, mirrorBaseUrl = null) {
     if (forgeVersion && forgeVersion.startsWith(gameVersion + '-')) {
         forgeVersion = forgeVersion.slice(gameVersion.length + 1);
         console.log(`[Forge] 版本号标准化: 去除MC版本前缀 -> ${forgeVersion}`);
@@ -10344,13 +10391,43 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
             return { success: false, error: baseResult.error };
         }
         
-        const installerUrl = `${FORGE_MAVEN_URL}/${gameVersion}-${forgeVersion}/forge-${gameVersion}-${forgeVersion}-installer.jar`;
+        const forgeMavenBase = mirrorBaseUrl || FORGE_MAVEN_URL;
+        const installerUrl = `${forgeMavenBase}/${gameVersion}-${forgeVersion}/forge-${gameVersion}-${forgeVersion}-installer.jar`;
         const installerPath = path.join(DATA_DIR, 'temp', `forge-installer-${gameVersion}-${forgeVersion}.jar`);
         if (!fs.existsSync(path.dirname(installerPath))) fs.mkdirSync(path.dirname(installerPath), { recursive: true });
 
         if (onProgress) onProgress(0, '正在下载Forge安装包...');
         console.log(`[Forge] Downloading installer from: ${installerUrl}`);
-        await downloadFileWithMirror(installerUrl, installerPath);
+
+        let installerOk = false;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            await downloadFileWithMirror(installerUrl, installerPath);
+            try {
+                const dlStat = fs.statSync(installerPath);
+                if (dlStat.size < 64 * 1024) {
+                    console.error(`[Forge] 安装器文件过小 (${dlStat.size} bytes)，疑似损坏，重试下载...`);
+                    try { fs.unlinkSync(installerPath); } catch (_) {}
+                    continue;
+                }
+                const fd = fs.openSync(installerPath, 'r');
+                const buf = Buffer.alloc(2);
+                fs.readSync(fd, buf, 0, 2, 0);
+                fs.closeSync(fd);
+                if (buf[0] !== 0x50 || buf[1] !== 0x4B) {
+                    console.error(`[Forge] 安装器 magic bytes 不匹配 (期望 PK)，疑似损坏，重试下载...`);
+                    try { fs.unlinkSync(installerPath); } catch (_) {}
+                    continue;
+                }
+                installerOk = true;
+                break;
+            } catch (e) {
+                console.error(`[Forge] 安装器校验失败: ${e.message}，重试下载...`);
+                try { fs.unlinkSync(installerPath); } catch (_) {}
+            }
+        }
+        if (!installerOk) {
+            throw new Error('Forge 安装器下载后校验失败，文件可能已损坏');
+        }
 
         const versionDir = path.join(VERSIONS_DIR, versionId);
         if (!fs.existsSync(versionDir)) fs.mkdirSync(versionDir, { recursive: true });
@@ -10470,10 +10547,13 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
                         onProgress(0.10 + (forgeLibDone / totalForgeLibs) * 0.30, `正在下载Forge库文件 (${forgeLibDone + 1}/${forgeLibTasks.length})`);
                     }
 
+                    const libSize = lib.downloads?.artifact?.size || 0;
+                    const libTimeout = libSize > 10 * 1024 * 1024 ? 300000 : null;
+
                     if (lib.downloads?.artifact?.url) {
                         try {
                             if (fs.existsSync(libPath)) fs.unlinkSync(libPath);
-                            await downloadFileWithMirror(lib.downloads.artifact.url, libPath);
+                            await downloadFileWithMirror(lib.downloads.artifact.url, libPath, null, 3, null, libTimeout);
                         } catch (e) {
                             forgeLibFailures++;
                             console.log(`[Forge] Failed to download ${lib.name}: ${e.message}`);
@@ -10489,22 +10569,30 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
                         const dlUrl = `${baseUrl}${mavenGroup}/${lname}/${lver}/${jarName}`;
                         try {
                             if (fs.existsSync(libPath)) fs.unlinkSync(libPath);
-                            await downloadFileWithMirror(dlUrl, libPath);
+                            await downloadFileWithMirror(dlUrl, libPath, null, 3, null, libTimeout);
                         } catch (e2) {
                             if (isForgeLib) {
                                 const altBase = 'https://libraries.minecraft.net/';
                                 const altUrl = `${altBase}${mavenGroup}/${lname}/${lver}/${jarName}`;
-                                try { await downloadFileWithMirror(altUrl, libPath); } catch (e3) {
-                                    forgeLibFailures++;
-                                    console.log(`[Forge] Failed to download ${lib.name}: ${e2.message} / ${e3.message}`);
+                                try { await downloadFileWithMirror(altUrl, libPath, null, 3, null, libTimeout); } catch (e3) {
+                                    const bmclapiUrl = `https://bmclapi2.bangbang93.com/maven/${mavenGroup}/${lname}/${lver}/${jarName}`;
+                                    try { await downloadFileWithMirror(bmclapiUrl, libPath, null, 3, null, libTimeout); } catch (e4) {
+                                        forgeLibFailures++;
+                                        console.log(`[Forge] Failed to download ${lib.name}: ${e2.message} / ${e3.message} / ${e4.message}`);
+                                    }
                                 }
                             } else {
                                 const forgeMirrorUrl = `https://maven.minecraftforge.net/${mavenGroup}/${lname}/${lver}/${jarName}`;
                                 try {
-                                    await downloadFileWithMirror(forgeMirrorUrl, libPath);
+                                    await downloadFileWithMirror(forgeMirrorUrl, libPath, null, 3, null, libTimeout);
                                 } catch (e3) {
-                                    forgeLibFailures++;
-                                    console.log(`[Forge] Failed to download ${lib.name}: ${e2.message} / ${e3.message}`);
+                                    const bmclapiUrl = `https://bmclapi2.bangbang93.com/maven/${mavenGroup}/${lname}/${lver}/${jarName}`;
+                                    try {
+                                        await downloadFileWithMirror(bmclapiUrl, libPath, null, 3, null, libTimeout);
+                                    } catch (e4) {
+                                        forgeLibFailures++;
+                                        console.log(`[Forge] Failed to download ${lib.name}: ${e2.message} / ${e3.message} / ${e4.message}`);
+                                    }
                                 }
                             }
                         }
@@ -10570,7 +10658,7 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
             const fallbackJson = {
                 id: versionId,
                 inheritsFrom: gameVersion,
-                mainClass: installProfile.install?.mainClass || 'cpw.mods.modlauncher.Launcher',
+                mainClass: installProfile.install?.mainClass || installProfile.json?.mainClass || 'cpw.mods.modlauncher.Launcher',
                 type: 'release',
                 libraries: installProfile.libraries || [],
                 arguments: {
@@ -10578,6 +10666,36 @@ async function installForge(gameVersion, forgeVersion, onProgress = null) {
                     jvm: []
                 }
             };
+
+            const mcVersionForAssets = installProfile.minecraftVersion || installProfile.data?.MINECRAFT_VERSION?.client || gameVersion;
+            if (mcVersionForAssets) {
+                try {
+                    const manifestPath = path.join(ASSETS_DIR, '..', 'versions', `${mcVersionForAssets}`, `${mcVersionForAssets}.json`);
+                    if (fs.existsSync(manifestPath)) {
+                        const baseVj = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                        if (baseVj.assetIndex) fallbackJson.assetIndex = baseVj.assetIndex;
+                    } else {
+                        fallbackJson.assetIndex = { id: mcVersionForAssets, url: `${MOJANG_API}/mc/game/version_manifest_v2.json` };
+                    }
+                } catch (_) {
+                    fallbackJson.assetIndex = { id: mcVersionForAssets };
+                }
+            }
+
+            if (installProfile.data) {
+                const clientData = {};
+                for (const [key, val] of Object.entries(installProfile.data)) {
+                    if (val && val.client !== undefined && val.client !== null) {
+                        clientData[key] = val.client;
+                    }
+                }
+                if (Object.keys(clientData).length > 0) {
+                    fallbackJson.data = clientData;
+                }
+                if (clientData.MINECRAFT_VERSION) {
+                    fallbackJson.arguments.game.push('--fml.mcpVersion', clientData.MCP_VERSION || '');
+                }
+            }
 
             console.log(`[Forge] Fallback mainClass: ${fallbackJson.mainClass}`);
 
@@ -11970,6 +12088,7 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
 
     let result;
     const MAX_IMPORT_RETRIES = 3;
+    const tempFiles = [];
     for (let importAttempt = 1; importAttempt <= MAX_IMPORT_RETRIES; importAttempt++) {
         try {
             if (modrinthEntry) {
@@ -11983,13 +12102,47 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
             if (result && result.success) break;
             if (result && !result.success && importAttempt < MAX_IMPORT_RETRIES) {
                 console.log(`[Modpack] 导入失败，尝试第 ${importAttempt + 1} 次...`);
-                if (result.versionId) cleanupVersionChain(result.versionId);
+                if (result.versionId) {
+                    cleanupVersionChain(result.versionId);
+                    console.log(`[Modpack] 清理版本链: ${result.versionId}`);
+                }
+                if (result.loaderVersionId) {
+                    try {
+                        const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
+                        if (fs.existsSync(loaderDir)) {
+                            fs.rmSync(loaderDir, { recursive: true, force: true });
+                            console.log(`[Modpack] 清理加载器目录: ${result.loaderVersionId}`);
+                        }
+                    } catch (ce) {
+                        console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
+                    }
+                }
                 await new Promise(r => setTimeout(r, 2000 * importAttempt));
                 continue;
             }
         } catch (e) {
             console.error(`[Modpack] Import attempt ${importAttempt} failed:`, e.message);
             if (importAttempt >= MAX_IMPORT_RETRIES) {
+                if (result && result.versionId) {
+                    cleanupVersionChain(result.versionId);
+                    console.log(`[Modpack] 最终失败，清理版本链: ${result.versionId}`);
+                }
+                if (result && result.loaderVersionId) {
+                    try {
+                        const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
+                        if (fs.existsSync(loaderDir)) {
+                            fs.rmSync(loaderDir, { recursive: true, force: true });
+                            console.log(`[Modpack] 最终失败，清理加载器目录: ${result.loaderVersionId}`);
+                        }
+                    } catch (ce) {
+                        console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
+                    }
+                }
+                for (const tmp of tempFiles) {
+                    try {
+                        if (fs.existsSync(tmp)) fs.rmSync(tmp, { recursive: true, force: true });
+                    } catch (te) {}
+                }
                 return { success: false, error: '整合包导入失败: ' + e.message };
             }
             await new Promise(r => setTimeout(r, 2000 * importAttempt));
@@ -11999,6 +12152,17 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
     if (result && !result.success && result.versionId) {
         cleanupVersionChain(result.versionId);
         console.log(`[Modpack] Cleaned up failed version chain: ${result.versionId}`);
+        if (result.loaderVersionId) {
+            try {
+                const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
+                if (fs.existsSync(loaderDir)) {
+                    fs.rmSync(loaderDir, { recursive: true, force: true });
+                    console.log(`[Modpack] 清理加载器目录: ${result.loaderVersionId}`);
+                }
+            } catch (ce) {
+                console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
+            }
+        }
     }
     
     return result;
@@ -12600,9 +12764,9 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
     if (failCount > 0) {
         const failedModNames = modFiles.filter(m => m.status === 'failed').map(m => m.name).join(', ');
         const warningMsg = `${failCount}/${filesList.length} 个Mod下载失败: ${failedModNames}。请在内部浏览器中手动下载缺失的Mod，或检查网络后重试。`;
-        return { success: true, name: packName, versionId, mcVersion, targetVersion: targetVersion || '', warning: warningMsg, failedMods: modFiles.filter(m => m.status === 'failed') };
+        return { success: true, name: packName, versionId, mcVersion, targetVersion: targetVersion || '', warning: warningMsg, failedMods: modFiles.filter(m => m.status === 'failed'), loaderVersionId: loaderVersionId || null };
     }
-    return { success: true, name: packName, versionId, mcVersion, targetVersion: targetVersion || '' };
+    return { success: true, name: packName, versionId, mcVersion, targetVersion: targetVersion || '', loaderVersionId: loaderVersionId || null };
     } catch (e) {
         console.error('[mrpack] 导入失败:', e);
         cleanupVersionChain(versionId);
@@ -12624,11 +12788,30 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
     const loaders   = manifest.minecraft && manifest.minecraft.modLoaders ? manifest.minecraft.modLoaders : [];
     const modLoader = loaders.length > 0 ? loaders[0].id : '';
 
-    const mlParts = (modLoader || '').split('-');
     let forgeVerCF = '', fabricVerCF = '', neoforgeVerCF = '';
-    if (mlParts[0] === 'forge') forgeVerCF = mlParts.slice(1).join('-');
-    else if (mlParts[0] === 'neoforge') neoforgeVerCF = mlParts.slice(1).join('-');
-    else if (mlParts[0] === 'fabric') fabricVerCF = mlParts.slice(1).join('-');
+    const mlLower = (modLoader || '').toLowerCase();
+    
+    if (/^forge[-]?(\d)/.test(mlLower)) {
+        const mlParts = (modLoader || '').split('-');
+        forgeVerCF = mlParts[0].toLowerCase() === 'forge' ? mlParts.slice(1).join('-') : mlParts.join('-').replace(/^forge/i, '');
+    } else if (/^neoforge[-]?(\d)/.test(mlLower)) {
+        const mlParts = (modLoader || '').split('-');
+        neoforgeVerCF = mlParts[0].toLowerCase() === 'neoforge' ? mlParts.slice(1).join('-') : mlParts.join('-').replace(/^neoforge/i, '');
+    } else if (/^fabric[-]?loader[-]?(\d)/.test(mlLower)) {
+        const mlParts = (modLoader || '').split('-');
+        if (mlParts[0].toLowerCase() === 'fabric' && mlParts[1] && mlParts[1].toLowerCase() === 'loader') {
+            fabricVerCF = mlParts.slice(2).join('-');
+        } else if (mlParts[0].toLowerCase() === 'fabric') {
+            fabricVerCF = mlParts.slice(1).join('-').replace(/^loader[-]?/i, '');
+        } else {
+            fabricVerCF = mlParts.join('-').replace(/^fabric[-]?loader[-]?/i, '');
+        }
+    } else if (/^fabric[-]?(\d)/.test(mlLower)) {
+        const mlParts = (modLoader || '').split('-');
+        fabricVerCF = mlParts[0].toLowerCase() === 'fabric' ? mlParts.slice(1).join('-') : mlParts.join('-').replace(/^fabric/i, '');
+    }
+    
+    console.log(`[CurseForge] 解析 modLoader: "${modLoader}" -> forge=${forgeVerCF}, fabric=${fabricVerCF}, neoforge=${neoforgeVerCF}`);
 
     progress('prepare', `整合包: ${packName}  MC: ${mcVersion}`, 8);
 
@@ -13141,7 +13324,8 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
     return {
         success: true, name: packName, versionId, mcVersion, targetVersion: targetVersion || '',
         warning: cfWarning || failWarning || undefined,
-        failedMods: cfFailedCount > 0 ? cfFailedMods : undefined
+        failedMods: cfFailedCount > 0 ? cfFailedMods : undefined,
+        loaderVersionId: loaderVersionId || null
     };
     } catch (e) {
         console.error('[CurseForge] 导入失败:', e);
@@ -13337,22 +13521,32 @@ async function handleNativeAPI(pathname, method, body, query) {
     };
     res.flushHeaders = () => {};
 
-    const parsedUrl = url.parse(req.url, true);
+    try {
+        const parsedUrl = url.parse(req.url, true);
 
-    const apiResult = handleAPI(pathname, req, res, parsedUrl);
+        const apiResult = handleAPI(pathname, req, res, parsedUrl);
 
-    await new Promise(r => setImmediate(() => {
-        if (body !== null && body !== undefined) {
-            req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+        await new Promise(r => setImmediate(() => {
+            if (body !== null && body !== undefined) {
+                req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+            }
+            req.emit('end');
+            setImmediate(r);
+        }));
+
+        await apiResult;
+
+        if (!finished) {
+            await finishPromise;
         }
-        req.emit('end');
-        setImmediate(r);
-    }));
-
-    await apiResult;
-
-    if (!finished) {
-        await finishPromise;
+    } catch (e) {
+        console.error(`[Server] handleNativeAPI error for ${pathname}:`, e.message || e);
+        if (!finished) {
+            statusCode = 500;
+            chunks = [Buffer.from(JSON.stringify({ error: '服务器内部错误', detail: e.message }))];
+            finished = true;
+            if (finishResolve) { finishResolve(); finishResolve = null; }
+        }
     }
 
     return {
@@ -17057,8 +17251,14 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         try {
                             metadata = await sharp(skinBuf).metadata();
                         } catch (e) { sendError('Invalid PNG', 400); return; }
-                        if (!((metadata.width === 64 && metadata.height === 64) || (metadata.width === 64 && metadata.height === 32))) {
-                            sendError('Skin must be 64x64 or 64x32 PNG', 400); return;
+                        const isStandardSize = (metadata.width === 64 && (metadata.height === 64 || metadata.height === 32));
+                        if (!isStandardSize) {
+                            try {
+                                skinBuf = await sharp(skinBuf).resize(64, 64, { kernel: 'nearest' }).png().toBuffer();
+                                console.log(`[Upload] Resized skin from ${metadata.width}x${metadata.height} to 64x64`);
+                            } catch (resizeErr) {
+                                console.warn('[Upload] Sharp resize failed, saving original size:', resizeErr.message);
+                            }
                         }
                         const fileName = `custom_${accountId}_${Date.now()}.png`;
                         const filePath = path.join(__dirname, 'img', fileName);
@@ -18007,7 +18207,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 const dsSession = modDownloadSessions.get(dsSessionId);
                 sendJSON({ ...dsSession });
                 if (dsSession.status === 'completed' || dsSession.status === 'failed') {
-                    setTimeout(() => modDownloadSessions.delete(dsSessionId), 30000);
+                    setTimeout(() => modDownloadSessions.delete(dsSessionId), 120000);
                 }
                 break;
             }
@@ -18578,7 +18778,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                         try { fs.unlinkSync(destPath); } catch (e) {}
                                     } else {
                                         if (s) {
-                                            s.status = 'failed'; s.progress = 100;
+                                            s.status = 'failed';
+                                            s.progress = 100;
                                             s.message = `整合包导入失败: ${importResult.error || '未知错误'}`;
                                             console.error('[Modpack] importModpackFromPath failed:', importResult.error, 'versionId:', importResult.versionId);
                                         }
