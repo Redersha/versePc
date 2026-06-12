@@ -4266,13 +4266,15 @@ function getRequiredJavaVersion(versionId, versionJson = null) {
 
     const baseVer = versionId.split('-')[0].split('_')[0];
     const parts = baseVer.split('.').map(Number);
-    const major = parts[0] || 0;
-    const minor = parts[1] || 0;
-    const patch = parts[2] || 0;
-    if (major > 1 || (major === 1 && minor > 20) || (major === 1 && minor === 20 && patch >= 5)) return 21;
-    if (major === 1 && minor >= 17) return 16;
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+        const major = parts[0];
+        const minor = parts[1];
+        const patch = parts[2] || 0;
+        if (major >= 2 || (major === 1 && minor > 20) || (major === 1 && minor === 20 && patch >= 5)) return 21;
+        if (major === 1 && minor >= 17) return 16;
+    }
     const loaderPart = versionId.split('-').slice(1).join('-').toLowerCase();
-    if (loaderPart.includes('forge') && major === 1 && minor >= 16) return 11;
+    if (loaderPart.includes('forge') && parts.length >= 2 && parts[0] === 1 && parts[1] >= 16) return 11;
     return 8;
 }
 
@@ -4592,8 +4594,42 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
             name: `${versionId}.jar`
         });
     } else {
+        let fallbackUrl = null, fallbackSha1 = null, fallbackSize = null, fallbackJarId = null;
+        const _chainVisited = new Set();
+        let _cur = versionJson;
+        while (_cur && _cur.inheritsFrom && !_chainVisited.has(_cur.inheritsFrom)) {
+            _chainVisited.add(_cur.inheritsFrom);
+            try {
+                const pjPath = path.join(VERSIONS_DIR, _cur.inheritsFrom, `${_cur.inheritsFrom}.json`);
+                if (fs.existsSync(pjPath)) {
+                    const pj = JSON.parse(fs.readFileSync(pjPath, 'utf-8'));
+                    if (pj.downloads?.client?.url) {
+                        fallbackUrl = pj.downloads.client.url;
+                        fallbackSha1 = pj.downloads.client.sha1;
+                        fallbackSize = pj.downloads.client.size;
+                        fallbackJarId = _cur.inheritsFrom;
+                        break;
+                    }
+                    _cur = pj;
+                    continue;
+                }
+            } catch (_) {}
+            break;
+        }
         result.mainJar.ok = false;
         result.mainJar.message = '主JAR文件缺失';
+        if (fallbackUrl && fallbackJarId) {
+            const fallbackPath = path.join(VERSIONS_DIR, fallbackJarId, `${fallbackJarId}.jar`);
+            result.missingFiles.push({
+                type: 'main_jar',
+                url: fallbackUrl,
+                path: fallbackPath,
+                sha1: fallbackSha1,
+                size: fallbackSize,
+                name: `${fallbackJarId}.jar`
+            });
+            console.log(`[checkDeps] 主JAR缺失，从继承链版本 ${fallbackJarId} 获取下载URL`);
+        }
     }
 
     const libraries = versionJson.libraries || [];
@@ -7102,13 +7138,39 @@ function findMainJar(versionJson, versionId, externalVersionDir = null, _visited
             } catch (e) {}
         }
         
-        // Fallback: scan any jar in inherited version dir
         const parentDir = path.join(VERSIONS_DIR, versionJson.inheritsFrom);
         if (fs.existsSync(parentDir)) {
             try {
-                const jars = fs.readdirSync(parentDir).filter(f => f.endsWith('.jar'));
+                const jars = fs.readdirSync(parentDir).filter(f => f.endsWith('.jar') && !f.endsWith('-sources.jar'));
                 if (jars.length > 0) return path.join(parentDir, jars[0]);
             } catch (e) {}
+        }
+    }
+
+    // Final fallback: scan all version dirs for a base client jar
+    if (!isExternal) {
+        const allDirs = [
+            path.join(VERSIONS_DIR, actualVersionId),
+            ...(versionJson.inheritsFrom ? [path.join(VERSIONS_DIR, versionJson.inheritsFrom)] : [])
+        ];
+        const visitedParents = _visited || new Set();
+        for (const d of allDirs) {
+            if (visitedParents.has(path.basename(d))) continue;
+            if (!fs.existsSync(d)) continue;
+            try {
+                const jsonFiles = fs.readdirSync(d).filter(f => f.endsWith('.json'));
+                for (const jf of jsonFiles) {
+                    try {
+                        const jData = JSON.parse(fs.readFileSync(path.join(d, jf), 'utf-8'));
+                        if (jData.downloads?.client?.url) {
+                            const clientPath = path.join(d, jf.replace('.json', '.jar'));
+                            if (fs.existsSync(clientPath)) return clientPath;
+                            const innerJars = fs.readdirSync(d).filter(f => f.endsWith('.jar') && !f.endsWith('-sources.jar'));
+                            if (innerJars.length > 0) return path.join(d, innerJars[0]);
+                        }
+                    } catch (_) {}
+                }
+            } catch (_) {}
         }
     }
 
