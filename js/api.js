@@ -291,8 +291,8 @@ const API = {
         }
         return await apiPost('/api/mods/select-save-folder', { defaultPath });
     },
-    getModDependencies: (versionId, source = 'modrinth', gameVersion = '', loader = '') =>
-        apiPost('/api/mods/get-dependencies', { versionId, source, gameVersion, loader }),
+    getModDependencies: (versionId, source = 'modrinth', gameVersion = '', loader = '', projectId = '') =>
+        apiPost('/api/mods/get-dependencies', { versionId, source, gameVersion, loader, projectId }),
 
     // === 收藏夹管理 ===
     getFavorites: () => apiGet('/api/favorites'),

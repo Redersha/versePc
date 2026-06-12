@@ -2432,6 +2432,25 @@
                     </div>
                 </div>
 
+                <div id="update-modal" class="modal" style="display:none">
+                    <div class="modal-content announcement-modal-content" style="max-width:520px;">
+                        <div class="modal-header">
+                            <h3>发现新版本</h3>
+                            <button class="modal-close" onclick="dismissUpdateModal()">&times;</button>
+                        </div>
+                        <div class="modal-body announcement-modal-body">
+                            <div class="announcement-version" id="update-modal-version"></div>
+                            <div class="announcement-content" id="update-modal-content">
+                                <p>暂无更新内容</p>
+                            </div>
+                        </div>
+                        <div class="modal-footer announcement-modal-footer" style="justify-content:flex-end;gap:10px;">
+                            <button class="modal-btn modal-btn--primary" onclick="downloadFromQuark()">夸克网盘更新</button>
+                            <button class="modal-btn modal-btn--secondary" onclick="downloadFromGitHub()">GitHub 更新</button>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="screenshot-modal" class="modal" style="display:none;">
                     <div class="modal-content" style="max-width:800px;">
                         <div class="modal-header">
@@ -3212,6 +3231,7 @@
         if (!api || !api.updater) return;
 
         let currentUpdateVersion = null;
+        let _latestVersion = null;
 
         async function initUpdaterUI() {
             try {
@@ -3244,7 +3264,11 @@
             const container = document.getElementById('updater-release-notes');
             const content = document.getElementById('updater-release-notes-content');
             if (notes && notes.trim()) {
-                content.textContent = notes.trim();
+                if (typeof marked !== 'undefined') {
+                    content.innerHTML = marked.parse(notes.trim());
+                } else {
+                    content.textContent = notes.trim();
+                }
                 container.style.display = '';
             } else {
                 container.style.display = 'none';
@@ -3272,6 +3296,7 @@
 
                 case 'update-available':
                     currentUpdateVersion = data.version;
+                    _latestVersion = data.version;
                     statusArea.innerHTML = '<div style="display:flex;align-items:center;gap:6px;padding:10px;background:rgba(96,165,250,0.1);border-radius:8px;border:1px solid rgba(96,165,250,0.2);"><span style="font-size:20px;">🎉</span><div><div style="color:var(--accent);font-weight:600;font-size:14px;">发现新版本 v' + data.version + '</div><div style="font-size:12px;color:var(--text-muted);margin-top:2px;">点击下方按钮下载或查看详情</div></div></div>';
                     checkBtn.style.display = 'none';
                     skipBtn.style.display = '';
@@ -3279,6 +3304,18 @@
                     downloadBtn.style.display = '';
                     installBtn.style.display = 'none';
                     showReleaseNotes(data.releaseNotes);
+                    showUpdatePopup(data);
+                    addUpdateDots();
+                    { const card = document.getElementById('update-card');
+                    if (card) card.style.display = '';
+                    const verEl = document.getElementById('update-card-version');
+                    if (verEl) verEl.textContent = 'v' + data.currentVersion + ' → v' + data.version;
+                    const notesEl = document.getElementById('update-card-notes');
+                    if (notesEl && data.releaseNotes) {
+                        if (typeof marked !== 'undefined') notesEl.innerHTML = marked.parse(data.releaseNotes);
+                        else notesEl.textContent = data.releaseNotes;
+                        notesEl.style.display = '';
+                    } else if (notesEl) { notesEl.style.display = 'none'; } }
                     break;
 
                 case 'update-not-available':
@@ -3376,10 +3413,6 @@
             }
         };
 
-
-
-        let _latestVersion = null;
-
         window.dismissUpdateCard = function() {
             const card = document.getElementById('update-card');
             if (card) card.style.display = 'none';
@@ -3393,46 +3426,50 @@
             window.electronAPI?.openExternal?.('https://pan.quark.cn/s/02655f4bf804');
         };
 
-        api.updater.onStatusChanged(({ channel, data }) => {
-            if (channel === 'update-available' && data && data.version) {
-                _latestVersion = data.version;
-                const card = document.getElementById('update-card');
-                const verEl = document.getElementById('update-card-version');
-                const notesEl = document.getElementById('update-card-notes');
-                if (card) card.style.display = '';
-                if (verEl) verEl.textContent = 'v' + data.currentVersion + ' → v' + data.version;
-                if (notesEl && data.releaseNotes) {
-                    notesEl.textContent = data.releaseNotes;
-                    notesEl.style.display = '';
-                } else if (notesEl) {
-                    notesEl.style.display = 'none';
-                }
-                showUpdatePopup(data);
-                addUpdateDots();
-            }
-        });
-
         function showUpdatePopup(data) {
-            if (document.querySelector('.update-toast-popup')) return;
-            const popup = document.createElement('div');
-            popup.className = 'update-toast-popup';
-            popup.innerHTML = `
-                <button class="update-popup-close" onclick="this.parentElement.remove()">&times;</button>
-                <div class="update-popup-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent,#4caf50)" stroke-width="2" width="20" height="20"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                </div>
-                <div class="update-popup-content">
-                    <div class="update-popup-title">发现新版本 v${data.version}</div>
-                    <div class="update-popup-desc">${data.releaseNotes ? data.releaseNotes.split('\n').slice(0, 3).join('<br>') : '点击查看详情'}</div>
-                    <div class="update-popup-actions">
-                        <button class="update-popup-btn update-popup-btn-primary" onclick="navigateToPage('settings-other');this.closest('.update-toast-popup').remove();">查看详情</button>
-                        <button class="update-popup-btn update-popup-btn-secondary" onclick="this.closest('.update-toast-popup').remove();">稍后提醒</button>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(popup);
-            setTimeout(() => { if (popup.parentElement) popup.remove(); }, 15000);
+            const modal = document.getElementById('update-modal');
+            if (!modal) return;
+            const verEl = document.getElementById('update-modal-version');
+            const contentEl = document.getElementById('update-modal-content');
+            if (verEl) verEl.textContent = 'v' + (data.currentVersion || '?.?.?') + ' → v' + data.version;
+            if (contentEl && data.releaseNotes) {
+                const html = typeof marked !== 'undefined'
+                    ? marked.parse(data.releaseNotes)
+                    : data.releaseNotes.replace(/\n/g, '<br>');
+                contentEl.innerHTML = html;
+            } else if (contentEl) {
+                contentEl.innerHTML = '<p>更新内容加载中...</p>';
+            }
+            if (modal.parentElement !== document.body) {
+                document.body.appendChild(modal);
+            }
+            modal.style.display = 'flex';
+            requestAnimationFrame(function () {
+                modal.classList.add('modal-visible');
+                modal.classList.remove('modal-exiting');
+            });
+            var onKeyDown = function (e) {
+                if (e.key === 'Escape') dismissUpdateModal();
+            };
+            modal.addEventListener('keydown', onKeyDown);
+            modal._escCleanup = function () { modal.removeEventListener('keydown', onKeyDown); };
         }
+
+        window.dismissUpdateModal = function() {
+            const modal = document.getElementById('update-modal');
+            if (!modal) return;
+            if (typeof modal._escCleanup === 'function') {
+                modal._escCleanup();
+                modal._escCleanup = null;
+            }
+            modal.setAttribute('data-state', 'closed');
+            modal.classList.add('modal-exiting');
+            modal.classList.remove('modal-visible');
+            setTimeout(function () {
+                modal.classList.remove('modal-exiting');
+                modal.style.display = 'none';
+            }, 200);
+        };
 
         function addUpdateDots() {
             const settingsBtn = document.querySelector('#settings-submenu-group > .nav-btn');

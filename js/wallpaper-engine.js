@@ -187,7 +187,11 @@ class WallpaperEngine {
         }
 
         if (this.renderer) {
-            this.renderer.render(dt, timestamp);
+            if (this.currentMode === 'customImage' && !this.transitioning && this.renderer.loaded) {
+                // Static image: skip redraw, no need to repaint same frame
+            } else {
+                this.renderer.render(dt, timestamp);
+            }
         }
 
         if (this.transitioning && this.currentMode !== 'panorama') {

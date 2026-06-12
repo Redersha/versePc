@@ -895,127 +895,30 @@ var ANNOUNCEMENT_CONTENT = {
     title: 'VersePC 小规模测试公告',
     body: `
         <div class="announcement-section">
-            <p>感谢您参与 VersePC 的小规模测试！软件目前仍处于开发阶段，可能存在一些未发现的 bug 或不完善之处。我们诚挚邀请您在试用过程中帮助发掘问题，并通过邮件反馈至：</p>
+            <p>感谢您参与 VersePC 小规模测试！软件目前仍处于开发阶段，可能存在未发现的 bug，欢迎反馈至：</p>
             <p style="font-weight:bold;text-align:center;margin:12px 0;">doujie2978166201@163.com</p>
         </div>
 
         <div class="announcement-section">
-            <h4>VersePC 功能特色</h4>
-            <p>VersePC 是一款专为 Minecraft 玩家设计的现代化启动器，集成了多种实用功能，旨在提升游戏体验：</p>
-
-            <h5>1. 版本管理</h5>
+            <h4>主要功能</h4>
             <ul>
-                <li>自动识别并管理已安装的游戏版本（原版、Forge、Fabric、NeoForge、Quilt 等）</li>
-                <li>支持一键下载、安装、删除游戏版本</li>
-                <li>版本隔离功能：可设置独立游戏目录，避免存档、模组冲突</li>
-            </ul>
-
-            <h5>2. 模组管理</h5>
-            <ul>
-                <li>内置 Modrinth 和 CurseForge 模组搜索与下载</li>
-                <li>支持批量下载、多选操作、模组更新检测</li>
-                <li>模组详情展示依赖关系、兼容版本、下载量等信息</li>
-            </ul>
-
-            <h5>3. 资源整合下载</h5>
-            <ul>
-                <li>光影包、材质包、数据包、地图、存档等资源一键下载</li>
-                <li>自动匹配当前游戏版本，避免兼容性问题</li>
-            </ul>
-
-            <h5>4. 账户管理</h5>
-            <ul>
-                <li>支持 Microsoft 账户登录（正版）和离线账户（盗版）</li>
-                <li>皮肤预览与更换功能，支持自定义披风</li>
-            </ul>
-
-            <h5>5. Java 环境管理</h5>
-            <ul>
-                <li>自动检测系统已安装的 Java 版本</li>
-                <li>提供 Java 8/11/17 等版本的一键下载与安装</li>
-                <li>智能推荐适合当前游戏版本的 Java 环境</li>
-            </ul>
-
-            <h5>6. 整合包安装</h5>
-            <ul>
-                <li>直接从 Modrinth 和 CurseForge 浏览并安装整合包</li>
-                <li>支持整合包版本选择、模组列表预览</li>
-            </ul>
-
-            <h5>7. 游戏优化与设置</h5>
-            <ul>
-                <li>启动参数自定义（JVM 参数、内存分配等）</li>
-                <li>游戏内覆盖层（Overlay）显示 FPS、坐标等信息</li>
-                <li>一键优化设置，提升游戏性能</li>
-            </ul>
-
-            <h5>8. 崩溃分析与日志管理</h5>
-            <ul>
-                <li>游戏崩溃时自动收集日志，提供错误原因分析</li>
-                <li>支持日志导出、一键清理</li>
-            </ul>
-
-            <h5>9. 服务器与多人游戏</h5>
-            <ul>
-                <li>服务器列表管理，支持添加、收藏、测试连接延迟</li>
-                <li>局域网联机辅助工具（开发中）</li>
-            </ul>
-
-            <h5>10. 个性化界面</h5>
-            <ul>
-                <li>支持深色/浅色主题切换</li>
-                <li>自定义背景图片、动画效果</li>
-                <li>响应式设计，适应不同屏幕尺寸</li>
-            </ul>
-        </div>
-
-        <div class="announcement-section">
-            <h4>与其他启动器的独特功能</h4>
-            <p>VersePC 在以下方面提供了差异化体验：</p>
-
-            <h5>1. AI 智能分析</h5>
-            <ul>
-                <li>游戏崩溃时，VersePC 可通过 AI 分析日志，提供更准确的错误原因和修复建议</li>
-                <li>支持将崩溃日志一键发送至 AI 服务进行分析（需联网）</li>
-            </ul>
-
-            <h5>2. 统一资源管理</h5>
-            <ul>
-                <li>模组、光影、材质、数据包等资源均通过同一界面管理，无需切换多个页面</li>
-                <li>所有资源下载自动适配版本隔离目录，避免手动配置</li>
-            </ul>
-
-            <h5>3. 批量操作与效率提升</h5>
-            <ul>
-                <li>支持模组、资源包的批量选择、下载、删除</li>
-                <li>收藏夹功能：可保存常用模组、服务器，快速访问</li>
-            </ul>
-
-            <h5>4. 实时进度与任务管理</h5>
-            <ul>
-                <li>下载任务实时显示进度、速度、状态</li>
-                <li>支持多任务并发下载，失败自动重试</li>
-            </ul>
-
-            <h5>5. 深度版本隔离</h5>
-            <ul>
-                <li>不仅隔离存档，还可隔离模组、配置、资源包等</li>
-                <li>自动检测并隔离已有内容，避免意外覆盖</li>
-            </ul>
-
-            <h5>6. 跨平台兼容性</h5>
-            <ul>
-                <li>未来计划支持 macOS 和 Linux（当前仅 Windows）</li>
-                <li>采用 Electron 框架，确保界面一致性与性能</li>
+                <li><strong>版本管理</strong> — 原版、Forge、Fabric、NeoForge、Quilt 一键安装，支持版本隔离</li>
+                <li><strong>模组管理</strong> — 内置 Modrinth / CurseForge 搜索下载，支持批量操作与更新检测</li>
+                <li><strong>资源下载</strong> — 光影、材质、数据包、地图一站式获取</li>
+                <li><strong>账户管理</strong> — Microsoft 正版登录 + 离线模式，支持皮肤与披风</li>
+                <li><strong>Java 管理</strong> — 自动检测 + 一键下载安装 Java 8/11/17</li>
+                <li><strong>整合包</strong> — Modrinth / CurseForge 整合包浏览安装</li>
+                <li><strong>AI 分析</strong> — 崩溃日志 AI 智能分析，提供修复建议</li>
+                <li><strong>个性化</strong> — 深色/浅色主题、自定义背景</li>
             </ul>
         </div>
 
         <div class="announcement-section">
             <h4>注意事项</h4>
             <ul>
-                <li>测试期间可能会遇到功能不稳定、界面错位等问题，敬请谅解</li>
-                <li>如有任何建议或 bug 报告，请通过邮件详细描述（附上截图或日志更佳）</li>
-                <li>感谢您的参与，VersePC 的进步离不开每一位测试者的支持！</li>
+                <li>测试期间可能存在功能不稳定，敬请谅解</li>
+                <li>如有建议或 bug 报告，请通过邮件详细描述（附截图或日志更佳）</li>
+                <li>感谢每一位测试者的支持！</li>
             </ul>
         </div>
 
@@ -4837,7 +4740,7 @@ async function showModInstallConfirm(projectId, source, versionId, fileId) {
         if (versionId) {
             showToast('正在检查前置依赖...', 'info');
             try {
-                const depResult = await API.getModDependencies(versionId, source, currentGameVersion, currentLoader);
+                const depResult = await API.getModDependencies(versionId, source, currentGameVersion, currentLoader, md.projectId || md.slug);
                 const deps = depResult.dependencies || [];
                 if (deps.length > 0) {
                     showDependencyDialog(projectId, source, versionId, fileId, savePath, deps, currentGameVersion, currentLoader);
@@ -10732,12 +10635,16 @@ function browseJavaPath() {
 
 
 const SPONSORS = [
-    '梦七年', '池鱼', 'LaiChai', '现金小姐姐', '呼噜', 'nojang_JY', 'ADF白布',
-    'ffg', '鱼蛋卷', '爱发电用户_29981', 'sheng_1062', '爱发电用户_f00d6',
-    '爱发电用户_83d3b', '哈喽芋泥', '樻', '爱发电用户_xtWd', 'kiroli',
-    '爱发电用户_19443', 'ZYL', '爱发电用户_be45c', '爱发电用户_2166c',
-    'MaoJunyu2012', '纯〇科技', '爱发电用户_39960', '寻自游', '爱发电用户_00420',
-    '竹雾', '爱发电用户_979a9'
+    '爱发电用户_f6954', '我不会起名', 'xyh', '硕硕小主', 'ZJ_Rider 肆年',
+    'MC_不会玩的梓茗同学', 'ffhcv', '爱发电用户_364y', '爱发电用户_Kfq6',
+    '爱发电用户_VUch', '峰~', '京墨', '鲨掉', '爱发电用户_ef5f5',
+    '爱发电用户_3e0c7', '张琳轩', 'JasonDeng', '熙城种', '妺妤', 'Shanre',
+    '爱发电用户_bb606', 'penguinfly_java', '爱发电用户_xKT7', '梦七年', '池鱼',
+    'LaiChai', '现金小姐姐', '呼噜', 'nojang_JY', 'ADF白布', 'ffg', '鱼蛋卷',
+    'sheng_1062', '爱发电用户_f00d6', '爱发电用户_83d3b', '哈喽芋泥', '樻',
+    '爱发电用户_xtWd', 'kiroli', '爱发电用户_19443', 'ZYL', '爱发电用户_be45c',
+    '爱发电用户_2166c', 'MaoJunyu2012', '纯〇科技', '爱发电用户_39960', '寻自游',
+    'skin_c', '竹雾', '爱发电用户_979a9'
 ];
 
 function renderSponsors(filter) {

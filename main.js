@@ -310,7 +310,7 @@ function createWindow() {
         minHeight: 450,
         frame: false,
         show: true,
-        backgroundColor: '#ffffff',
+        backgroundColor: '#0a0a0a',
         title: 'VersePC - Minecraft Launcher',
         icon: path.join(__dirname, 'img', 'icon.ico'),
         webPreferences: {
