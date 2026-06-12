@@ -10845,6 +10845,111 @@ function verifyLoaderLibs(versionId) {
     }
 }
 
+function compareSemver(a, b) {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const na = pa[i] || 0;
+        const nb = pb[i] || 0;
+        if (na > nb) return 1;
+        if (na < nb) return -1;
+    }
+    return 0;
+}
+
+function parseVersionRequirement(req) {
+    if (!req || typeof req !== 'string') return null;
+    const m = req.match(/^([><=]+)\s*(.+)/);
+    if (!m) return { op: '>=', version: req.trim() };
+    return { op: m[1], version: m[2].trim() };
+}
+
+function scanModsForLoaderReqs(modsDir) {
+    const result = { fabric: null, forge: null };
+    if (!fs.existsSync(modsDir)) return result;
+    let AdmZip;
+    try { AdmZip = require('adm-zip'); } catch (_) { return result; }
+    const files = fs.readdirSync(modsDir).filter(f => f.endsWith('.jar'));
+    for (const f of files) {
+        try {
+            const zip = new AdmZip(path.join(modsDir, f));
+            let metaEntry = zip.getEntry('fabric.mod.json');
+            let isQuilt = false;
+            if (!metaEntry) { metaEntry = zip.getEntry('quilt.mod.json'); isQuilt = true; }
+            if (!metaEntry) continue;
+            const meta = JSON.parse(metaEntry.getData().toString('utf8'));
+            const deps = isQuilt ? (meta.quilt_loader?.dependencies || {}) : (meta.depends || {});
+            const fabricReq = deps.fabricloader || deps['fabric-loader'];
+            if (fabricReq && typeof fabricReq === 'string') {
+                const parsed = parseVersionRequirement(fabricReq);
+                if (parsed && (parsed.op === '>=' || parsed.op === '=' || parsed.op === '==')) {
+                    if (!result.fabric || compareSemver(parsed.version, result.fabric) > 0) {
+                        result.fabric = parsed.version;
+                    }
+                }
+            }
+            const forgeReq = deps.forge;
+            if (forgeReq && typeof forgeReq === 'string') {
+                const parsed = parseVersionRequirement(forgeReq);
+                if (parsed && (parsed.op === '>=' || parsed.op === '=' || parsed.op === '==')) {
+                    if (!result.forge || compareSemver(parsed.version, result.forge) > 0) {
+                        result.forge = parsed.version;
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+    return result;
+}
+
+async function ensureLoaderCompat(versionId, versionDir, mcVersion, currentLoaderVer, loaderType, progress, abortSignal) {
+    const modsDir = path.join(versionDir, 'mods');
+    const reqs = scanModsForLoaderReqs(modsDir);
+    const needed = loaderType === 'fabric' ? reqs.fabric : (loaderType === 'forge' ? reqs.forge : null);
+    if (!needed || !currentLoaderVer) return { upgraded: false };
+    if (compareSemver(needed, currentLoaderVer) <= 0) return { upgraded: false };
+    console.log(`[Modpack] 模组需要 ${loaderType} ≥ ${needed}，当前安装 ${currentLoaderVer}，正在升级...`);
+    progress('loader-upgrade', `正在升级 ${loaderType === 'fabric' ? 'Fabric' : 'Forge'} 加载器到 ${needed}...`, 88, [], '');
+    let newLoaderVersionId;
+    try {
+        if (loaderType === 'fabric') {
+            newLoaderVersionId = `fabric-loader-${needed}-${mcVersion}`;
+            const ir = await installFabric(mcVersion, needed, (p, msg) => {
+                progress('loader-upgrade', msg || `安装 Fabric ${needed}...`, 88 + Math.round(p * 2), [], '');
+            });
+            if (!ir.success) throw new Error(ir.error);
+        } else {
+            newLoaderVersionId = `${mcVersion}-forge-${needed}`;
+            const ir = await installForge(mcVersion, needed, (p, msg) => {
+                progress('loader-upgrade', msg || `安装 Forge ${needed}...`, 88 + Math.round(p * 2), [], '');
+            });
+            if (!ir.success) throw new Error(ir.error);
+        }
+        const oldJsonPath = path.join(versionDir, `${versionId}.json`);
+        if (fs.existsSync(oldJsonPath)) {
+            const oldJson = JSON.parse(fs.readFileSync(oldJsonPath, 'utf-8'));
+            oldJson.inheritsFrom = newLoaderVersionId;
+            let newMainClass = '';
+            try {
+                const lvJsonPath = path.join(VERSIONS_DIR, newLoaderVersionId, `${newLoaderVersionId}.json`);
+                if (fs.existsSync(lvJsonPath)) {
+                    const lvJson = JSON.parse(fs.readFileSync(lvJsonPath, 'utf-8'));
+                    newMainClass = lvJson.mainClass || '';
+                }
+            } catch (_) {}
+            if (newMainClass) oldJson.mainClass = newMainClass;
+            fs.writeFileSync(oldJsonPath, JSON.stringify(oldJson, null, 2));
+            console.log(`[Modpack] 版本JSON已更新: inheritsFrom → ${newLoaderVersionId}, mainClass → ${newMainClass || '未变更'}`);
+        }
+        progress('loader-upgrade', `${loaderType === 'fabric' ? 'Fabric' : 'Forge'} 已升级到 ${needed}`, 90, [], '');
+        return { upgraded: true, newVersion: needed };
+    } catch (e) {
+        console.error(`[Modpack] ${loaderType} 升级失败: ${e.message}`);
+        progress('loader-upgrade', `${loaderType} 升级失败: ${e.message}（使用原版本继续）`, 90, [], '');
+        return { upgraded: false, error: e.message };
+    }
+}
+
 async function verifyImportLibs(versionId, progress, abortSignal) {
     const mergedJson = resolveVersionJson(versionId);
     const allLibs = mergedJson ? (mergedJson.libraries || []) : [];
@@ -13565,6 +13670,14 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         console.warn(`[mrpack] Mod下载汇总: ${okCount}成功 ${failCount}失败 (共${filesList.length}个)`);
     }
 
+    if (loaderVersionId && mcVersion) {
+        const lt = fabricVer ? 'fabric' : (forgeVer || neoforgeVer ? 'forge' : null);
+        const cv = fabricVer || forgeVer || neoforgeVer;
+        if (lt && cv) {
+            await ensureLoaderCompat(versionId, versionDir, mcVersion, cv, lt, progress, abortSignal);
+        }
+    }
+
     progress('verify', '正在验证整合包完整性...', 90, [...overrideFiles, ...modFiles], '');
     const verifyResult = await verifyImportLibs(versionId, progress, abortSignal);
     if (!verifyResult.ok) {
@@ -14140,6 +14253,14 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
     }
     await Promise.all(cfPool);
     if (abortSignal && abortSignal.aborted) throw new Error('下载已取消');
+
+    if (loaderVersionId && mcVersion) {
+        const lt = fabricVerCF ? 'fabric' : (forgeVerCF || neoforgeVerCF ? 'forge' : null);
+        const cv = fabricVerCF || forgeVerCF || neoforgeVerCF;
+        if (lt && cv) {
+            await ensureLoaderCompat(versionId, versionDir, mcVersion, cv, lt, progress, abortSignal);
+        }
+    }
 
     progress('verify', '正在验证整合包完整性...', 90, [...overrideFiles, ...cfModFiles], '');
     const cfVerifyResult = await verifyImportLibs(versionId, progress, abortSignal);
