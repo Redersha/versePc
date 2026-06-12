@@ -68,7 +68,7 @@ const dlManager = {
     order: [],
     add(id, name, type, sessionId, iconUrl) {
         if (this.tasks.has(id)) return;
-        this.tasks.set(id, { id, name, type, sessionId, iconUrl: iconUrl || '', progress: 0, status: 'downloading', message: '', files: [], expanded: false });
+        this.tasks.set(id, { id, name, type, sessionId, iconUrl: iconUrl || '', progress: 0, status: 'downloading', message: '', files: [], stageHistory: [], expanded: false });
         this.order.push(id);
         this.updateFab();
         this.render();
@@ -83,8 +83,9 @@ const dlManager = {
         const task = this.tasks.get(id);
         if (!task) return;
         Object.assign(task, data);
+        task.progress = Math.min(task.progress || 0, 100);
         if (data.status === 'completed' || data.status === 'failed') {
-            task.progress = data.status === 'completed' ? 100 : task.progress;
+            task.progress = data.status === 'completed' ? 100 : Math.min(task.progress, 100);
         }
         this.updateFab();
         this.updateDom(id);
@@ -105,16 +106,40 @@ const dlManager = {
         if (statusEl) {
             statusEl.textContent = t.status === 'completed' ? '下载完成' : t.status === 'failed' ? '下载失败' : (t.message || '下载中...');
         }
-        const detailEl = taskEl.querySelector('.dl-task-detail');
-        if (detailEl && t.files && t.files.length > 0) {
-            var hash = '';
-            for (var i = 0; i < t.files.length; i++) {
-                var f = t.files[i];
-                hash += f.name + '_' + f.status + '_' + f.progress + ';';
+        let detailEl = taskEl.querySelector('.dl-task-detail');
+        const hasStageData = t.type === 'modpack' && t.stageHistory && t.stageHistory.length > 0;
+        const hasFileData = t.files && t.files.length > 0;
+        if (!detailEl && t.type !== 'mod' && (hasStageData || hasFileData)) {
+            detailEl = document.createElement('div');
+            detailEl.className = 'dl-task-detail';
+            const headerEl = taskEl.querySelector('.dl-task-header');
+            if (headerEl && headerEl.nextSibling) {
+                taskEl.insertBefore(detailEl, headerEl.nextSibling);
+            } else {
+                taskEl.appendChild(detailEl);
             }
-            if (hash !== t._lastFilesHash) {
-                t._lastFilesHash = hash;
-                detailEl.innerHTML = this.buildFilesHtml(t.files);
+        }
+        if (detailEl) {
+            if (hasStageData) {
+                var stageHash = '';
+                for (var i = 0; i < t.stageHistory.length; i++) {
+                    var s = t.stageHistory[i];
+                    stageHash += s.stage + '_' + s.progress + '_' + s.message + ';';
+                }
+                if (stageHash !== t._lastStageHash) {
+                    t._lastStageHash = stageHash;
+                    detailEl.innerHTML = this.buildStageHistoryHtml(t.stageHistory);
+                }
+            } else if (hasFileData) {
+                var hash = '';
+                for (var i = 0; i < t.files.length; i++) {
+                    var f = t.files[i];
+                    hash += f.name + '_' + f.status + '_' + f.progress + ';';
+                }
+                if (hash !== t._lastFilesHash) {
+                    t._lastFilesHash = hash;
+                    detailEl.innerHTML = this.buildFilesHtml(t.files);
+                }
             }
         }
         if (t.status === 'completed' || t.status === 'failed') {
@@ -140,6 +165,24 @@ const dlManager = {
             return '<div class="dl-file-item"><span class="dl-file-status ' + sClass + '">' + sIcon + '</span><span class="dl-file-name">' + escapeHtml(f.name || '') + '</span>' + (f.size ? '<span class="dl-file-size">' + f.size + '</span>' : '') + '</div>' + (progressBar ? '<div class="dl-file-progress">' + progressBar + '</div>' : '');
         }).join('');
     },
+    buildStageHistoryHtml(stages) {
+        // PCL-style stage list: shows each import stage with progress % and status icon
+        return stages.map(s => {
+            const progress = s.progress || 0;
+            let statusIcon = '○';
+            let statusClass = 'dl-stage-status--pending';
+            let progressHtml = '';
+            if (progress >= 100) {
+                statusIcon = '✓';
+                statusClass = 'dl-stage-status--completed';
+            } else if (progress > 0) {
+                statusIcon = '↓';
+                statusClass = 'dl-stage-status--active';
+                progressHtml = '<div class="dl-stage-progress-bar"><div class="dl-stage-progress-fill" style="width:' + Math.round(progress) + '%"></div></div><span class="dl-stage-percent">' + Math.round(progress) + '%</span>';
+            }
+            return '<div class="dl-stage-item"><span class="dl-stage-status ' + statusClass + '">' + statusIcon + '</span><span class="dl-stage-name">' + escapeHtml(s.message || s.stage || '') + '</span>' + (progressHtml ? '<div class="dl-stage-progress">' + progressHtml + '</div>' : '') + '</div>';
+        }).join('');
+    },
     toggleExpand(id) {
         const task = this.tasks.get(id);
         if (!task) return;
@@ -150,6 +193,24 @@ const dlManager = {
                 taskEl.classList.add('dl-task--expanded');
             } else {
                 taskEl.classList.remove('dl-task--expanded');
+            }
+            let detailEl = taskEl.querySelector('.dl-task-detail');
+            if (!detailEl) {
+                detailEl = document.createElement('div');
+                detailEl.className = 'dl-task-detail';
+                const headerEl = taskEl.querySelector('.dl-task-header');
+                if (headerEl && headerEl.nextSibling) {
+                    taskEl.insertBefore(detailEl, headerEl.nextSibling);
+                } else {
+                    taskEl.appendChild(detailEl);
+                }
+            }
+            if (task.type === 'modpack' && task.stageHistory && task.stageHistory.length > 0) {
+                detailEl.innerHTML = this.buildStageHistoryHtml(task.stageHistory);
+            } else if (task.files && task.files.length > 0) {
+                detailEl.innerHTML = this.buildFilesHtml(task.files);
+            } else if (task.expanded) {
+                detailEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">' + (task.status === 'downloading' ? '等待进度数据...' : '暂无详细信息') + '</div>';
             }
         } else {
             this.render();
@@ -196,16 +257,21 @@ const dlManager = {
             const statusText = t.status === 'completed' ? '下载完成' : t.status === 'failed' ? '下载失败' : (t.message || '下载中...');
             const isExpandable = t.type !== 'mod';
             const expandedClass = t.expanded && isExpandable ? 'dl-task--expanded' : '';
-            let filesHtml = '';
-            if (isExpandable && t.files && t.files.length > 0) {
-                filesHtml = this.buildFilesHtml(t.files);
+            let detailHtml = '';
+            if (isExpandable) {
+                let innerDetail = '';
+                if (t.type === 'modpack' && t.stageHistory && t.stageHistory.length > 0) {
+                    innerDetail = this.buildStageHistoryHtml(t.stageHistory);
+                } else if (t.files && t.files.length > 0) {
+                    innerDetail = this.buildFilesHtml(t.files);
+                }
+                detailHtml = '<div class="dl-task-detail">' + innerDetail + '</div>';
             }
             let actionsHtml = '';
             if (t.status === 'completed' || t.status === 'failed') {
                 actionsHtml = '<div class="dl-task-actions"><button class="btn btn-secondary btn-sm dl-task-remove-btn" data-task-id="' + escapeHtml(id) + '">移除</button></div>';
             }
             const arrowHtml = isExpandable ? '<svg class="dl-task-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>' : '';
-            const detailHtml = isExpandable ? '<div class="dl-task-detail">' + filesHtml + '</div>' : '';
             const headerClass = isExpandable ? 'dl-task-header dl-task-toggle-btn' : 'dl-task-header';
             return '<div class="dl-task ' + expandedClass + '" data-task-id="' + escapeHtml(id) + '">' +
                 '<div class="' + headerClass + '" data-task-id="' + escapeHtml(id) + '">' +
@@ -2438,19 +2504,28 @@ function openVersionDetail(versionId, versionUrl, versionType) {
 
 async function loadLoaderVersions(versionId) {
     const loaders = ['forge', 'neoforge', 'fabric', 'optifine'];
+    const mcMajor = parseInt(versionId.split('.')[0], 10);
+    const isNewVersioning = mcMajor >= 25;
+    console.log(`[LoaderVersions] Checking loaders for MC ${versionId} (major: ${mcMajor}, newVersioning: ${isNewVersioning})`);
     for (const loader of loaders) {
+        const descEl = document.getElementById(`loader-desc-${loader}`);
+        if (!descEl) continue;
         try {
             const versions = await API.getModLoaderVersions(versionId, loader);
-            const descEl = document.getElementById(`loader-desc-${loader}`);
+            console.log(`[LoaderVersions] ${loader}: ${versions ? versions.length : 0} versions found`);
             if (versions && versions.length > 0) {
                 const latestVer = versions[0].version || versions[0].id || versions[0] || '最新';
                 const loaderNames = { forge: 'Forge', neoforge: 'NeoForge', fabric: 'Fabric', optifine: 'OptiFine' };
                 descEl.textContent = `${loaderNames[loader]} ${latestVer} 可用`;
+            } else if (isNewVersioning && (loader === 'forge' || loader === 'neoforge')) {
+                descEl.textContent = '此版本暂未适配';
+            } else if (loader === 'optifine') {
+                descEl.textContent = '暂不支持此版本';
             } else {
-                descEl.textContent = loader === 'optifine' ? '暂不支持此版本' : '暂无可用版本';
+                descEl.textContent = '暂无可用版本';
             }
         } catch (e) {
-            const descEl = document.getElementById(`loader-desc-${loader}`);
+            console.error(`[LoaderVersions] ${loader} error:`, e.message);
             if (descEl) descEl.textContent = '加载失败';
         }
     }
@@ -4614,7 +4689,8 @@ function showModpackInstallModal(fileName, sessionId) {
                 progress: data.progress || 0,
                 status: displayStatus,
                 message: displayMessage,
-                files: files
+                files: files,
+                stageHistory: data.stageHistory || []
             });
             if (data.status === 'completed') {
                 showToast('整合包安装完成', 'success');
@@ -6599,7 +6675,8 @@ async function loadSkinSelector(acc) {
                 ctx.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8);
             };
             if (skin.id === 'custom') {
-                img.src = `/img/${skin.file}`;
+                const accUuid = (acc.uuid || '').replace(/-/g, '');
+                img.src = accUuid ? `/api/skin-head?uuid=${accUuid}&file=${encodeURIComponent(skin.file)}` : `/api/skin-head?id=steve`;
             } else {
                 img.src = `/api/skin-head?id=${skin.id}`;
             }
@@ -6651,16 +6728,30 @@ async function handleSkinUpload(input) {
     }
     showToast('正在上传…', 'info');
     try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('accountId', _currentDetailAccount.id);
+        const fileBase64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = reader.result;
+                const base64 = dataUrl.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
         const modelSelect = document.getElementById('skin-model-select') || document.querySelector('input[name="skin-model"]:checked');
         let modelValue = 'default';
         if (modelSelect) {
             modelValue = modelSelect.value || modelSelect.getAttribute('data-model') || 'default';
         }
-        formData.append('model', modelValue);
-        const resp = await fetch('/api/upload-skin', { method: 'POST', body: formData });
+        const resp = await fetch('/api/upload-skin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                accountId: _currentDetailAccount.id,
+                model: modelValue,
+                fileBase64: fileBase64
+            })
+        });
         const text = await resp.text();
         let result;
         try { result = JSON.parse(text); } catch (e) { showToast('上传失败: 服务器返回异常', 'error'); return; }
@@ -8285,17 +8376,69 @@ const typeIcons = {
     resourcepack: '🎨', shader: '☀️'
 };
 
+function getImportStageText(msg) {
+    if (!msg) return '处理中...';
+    if (msg.includes('download') || msg.includes('下载')) return '下载整合包内容...';
+    if (msg.includes('read') || msg.includes('读取') || msg.includes('分析')) return '分析整合包...';
+    if (msg.includes('mod') || msg.includes('模组')) return '下载整合包模组...';
+    if (msg.includes('override') || msg.includes('配置')) return '解压整合包配置...';
+    if (msg.includes('install') || msg.includes('安装')) return '安装整合包...';
+    return msg;
+}
+
 async function importModpackFromFile() {
+    if (window._modpackImporting) {
+        showToast('整合包正在导入中，请等待完成', 'warning');
+        return;
+    }
     try {
         const result = await API.selectModpackFile();
         if (result && result.filePath) {
             const filePath = result.filePath;
-            showToast('正在导入整合包...', 'info');
-            const importResult = await window.electronAPI.importModpack(filePath, '');
-            if (importResult && importResult.success) {
-                showToast(`整合包 "${importResult.name || '未知'}" 导入成功！`, 'success');
-            } else {
-                showToast(`导入失败: ${importResult?.error || '未知错误'}`, 'error');
+            console.log(`[Modpack][前端] 选择文件: ${filePath}`);
+            window._modpackImporting = true;
+            try {
+                if (typeof dlManager !== 'undefined') {
+                    const sessionId = 'local-modpack-' + Date.now();
+                    const taskId = 'modpack-' + sessionId;
+                    dlManager.add(taskId, result.name || '整合包导入', 'modpack', sessionId, '');
+                    navigateToPage('downloads');
+                    if (window.electronAPI?.onImportProgress) {
+                        if (window.electronAPI.removeImportProgressListener) window.electronAPI.removeImportProgressListener();
+                        window.electronAPI.onImportProgress(function (data) {
+                            const stageText = getImportStageText(data.message);
+                            console.log(`[Modpack][前端] 进度: ${data.stage} ${data.progress}% ${data.message}` + (data.stageHistory ? ` (阶段数: ${data.stageHistory.length})` : ''));
+                            dlManager.update(taskId, {
+                                progress: data.progress || 0,
+                                status: 'downloading',
+                                message: stageText,
+                                stageHistory: data.stageHistory || []
+                            });
+                        });
+                    }
+                    showToast('正在导入整合包...', 'info');
+                    console.log(`[Modpack][前端] 调用 IPC importModpack...`);
+                    const importResult = await window.electronAPI.importModpack(filePath, '');
+                    console.log(`[Modpack][前端] IPC 返回:`, importResult?.success ? '成功' : '失败', importResult?.error || '');
+                    if (importResult && importResult.success) {
+                        dlManager.update(taskId, { status: 'completed', progress: 100, message: '导入完成' });
+                        showToast(`整合包 "${importResult.name || '未知'}" 导入成功！`, 'success');
+                    } else {
+                        dlManager.update(taskId, { status: 'failed', progress: 100, message: importResult?.error || '未知错误', stageHistory: importResult?.stageHistory || [] });
+                        showToast(`导入失败: ${importResult?.error || '未知错误'}`, 'error');
+                    }
+                } else {
+                    navigateToPage('downloads');
+                    showToast('正在导入整合包...', 'info');
+                    const importResult = await window.electronAPI.importModpack(filePath, '');
+                    if (importResult && importResult.success) {
+                        showToast(`整合包 "${importResult.name || '未知'}" 导入成功！`, 'success');
+                    } else {
+                        showToast(`导入失败: ${importResult?.error || '未知错误'}`, 'error');
+                    }
+                }
+            } finally {
+                window._modpackImporting = false;
             }
         }
     } catch (e) {
@@ -8307,6 +8450,7 @@ document.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropaga
 document.addEventListener('drop', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (window._modpackImporting) return;
     const files = e.dataTransfer?.files;
     if (!files || files.length === 0) return;
     const file = files[0];
@@ -8318,14 +8462,53 @@ document.addEventListener('drop', (e) => {
             filePath = window.electronAPI.getDroppedFilePath(file);
         }
         if (filePath) {
-            showToast('正在导入整合包...', 'info');
-            window.electronAPI.importModpack(filePath, '').then(result => {
-                if (result && result.success) {
-                    showToast(`整合包 "${result.name || '未知'}" 导入成功！`, 'success');
-                } else {
-                    showToast(`导入失败: ${result?.error || '未知错误'}`, 'error');
+            window._modpackImporting = true;
+            if (typeof dlManager !== 'undefined') {
+                const sessionId = 'local-modpack-' + Date.now();
+                const taskId = 'modpack-' + sessionId;
+                dlManager.add(taskId, name || '整合包导入', 'modpack', sessionId, '');
+                navigateToPage('downloads');
+                if (window.electronAPI?.onImportProgress) {
+                    if (window.electronAPI.removeImportProgressListener) window.electronAPI.removeImportProgressListener();
+                    window.electronAPI.onImportProgress(function (data) {
+                        const stageText = getImportStageText(data.message);
+                        dlManager.update(taskId, {
+                            progress: data.progress || 0,
+                            status: 'downloading',
+                            message: stageText
+                        });
+                    });
                 }
-            }).catch(err => showToast('导入失败: ' + (err.message || ''), 'error'));
+                showToast('正在导入整合包...', 'info');
+                window.electronAPI.importModpack(filePath, '').then(result => {
+                    window._modpackImporting = false;
+                    if (result && result.success) {
+                        dlManager.update(taskId, { status: 'completed', progress: 100, message: '导入完成' });
+                        showToast(`整合包 "${result.name || '未知'}" 导入成功！`, 'success');
+                    } else {
+                        dlManager.update(taskId, { status: 'error', message: result?.error || '未知错误' });
+                        showToast(`导入失败: ${result?.error || '未知错误'}`, 'error');
+                    }
+                }).catch(err => {
+                    window._modpackImporting = false;
+                    dlManager.update(taskId, { status: 'error', message: err.message || '' });
+                    showToast('导入失败: ' + (err.message || ''), 'error');
+                });
+            } else {
+                navigateToPage('downloads');
+                showToast('正在导入整合包...', 'info');
+                window.electronAPI.importModpack(filePath, '').then(result => {
+                    window._modpackImporting = false;
+                    if (result && result.success) {
+                        showToast(`整合包 "${result.name || '未知'}" 导入成功！`, 'success');
+                    } else {
+                        showToast(`导入失败: ${result?.error || '未知错误'}`, 'error');
+                    }
+                }).catch(err => {
+                    window._modpackImporting = false;
+                    showToast('导入失败: ' + (err.message || ''), 'error');
+                });
+            }
         }
     }
 });

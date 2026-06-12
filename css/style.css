@@ -8145,6 +8145,60 @@ body {
     min-width: 30px;
     text-align: right;
 }
+/* PCL-style stage history for modpack import */
+.dl-stage-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.dl-stage-status {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: bold;
+}
+.dl-stage-status--pending { color: var(--text-muted); }
+.dl-stage-status--active { color: var(--accent); }
+.dl-stage-status--completed { color: #22c55e; }
+.dl-stage-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dl-stage-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0 4px 24px;
+}
+.dl-stage-progress-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.dl-stage-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+.dl-stage-percent {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 30px;
+    text-align: right;
+}
 .dl-task-actions {
     display: flex;
     gap: 6px;

@@ -274,8 +274,9 @@ class PanoramaRenderer {
     }
 
     setTheme(theme) {
-        if (this.currentTheme === theme) return;
-        this.currentTheme = theme;
+        const validTheme = theme || 'overworld';
+        if (this.currentTheme === validTheme) return;
+        this.currentTheme = validTheme;
         this.loaded = false;
         this._loadTextures();
     }
@@ -283,7 +284,8 @@ class PanoramaRenderer {
     _loadTextures() {
         if (!this.cube) return;
         const loader = new THREE.TextureLoader();
-        const basePath = 'img/panorama/' + this.currentTheme + '/';
+        const safeTheme = ['overworld', 'nether', 'end', 'panorama'].includes(this.currentTheme) ? this.currentTheme : 'overworld';
+        const basePath = 'img/panorama/' + safeTheme + '/';
         const faceOrder = [1, 3, 4, 5, 0, 2];
         this.cube.material.forEach((mat, i) => {
             loader.load(basePath + 'panorama_' + faceOrder[i] + '.png', (texture) => {

@@ -42,6 +42,7 @@
         });
 
         document.addEventListener('drop', function (e) {
+            if (window._modpackImporting) return;
             const files = e.dataTransfer && e.dataTransfer.files;
             if (!files || !files.length) return;
 
@@ -57,6 +58,10 @@
     }
 
     async function handleFileImport(file) {
+        if (window._modpackImporting) {
+            if (typeof showToast === 'function') showToast('整合包正在导入中，请等待完成', 'warning');
+            return;
+        }
         const ext = (file.name || '').toLowerCase();
         if (!ext.endsWith('.mrpack') && !ext.endsWith('.zip')) {
             if (typeof showToast === 'function') showToast('不支持的文件格式，请拖入 .mrpack 或 .zip 整合包', 'error');
@@ -68,6 +73,8 @@
             if (typeof showToast === 'function') showToast('无法获取文件路径，请通过文件选择按钮导入', 'error');
             return;
         }
+
+        window._modpackImporting = true;
 
         if (typeof showToast === 'function') showToast('正在导入整合包: ' + file.name, 'info');
 
@@ -123,6 +130,7 @@
             }
 
             if (result && result.success) {
+                window._modpackImporting = false;
                 if (typeof dlManager !== 'undefined') {
                     dlManager.update(taskId, {
                         progress: 100,
@@ -135,6 +143,7 @@
                 }
                 if (typeof loadVersions === 'function') loadVersions();
             } else {
+                window._modpackImporting = false;
                 if (typeof dlManager !== 'undefined') {
                     dlManager.update(taskId, {
                         status: 'failed',
@@ -146,6 +155,7 @@
                 }
             }
         } catch (err) {
+            window._modpackImporting = false;
             if (window.electronAPI && window.electronAPI.removeImportProgressListener) {
                 window.electronAPI.removeImportProgressListener();
             }

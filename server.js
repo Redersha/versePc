@@ -412,8 +412,18 @@ const VERSION_ICON_CACHE = new Map();
 const VERSION_ICON_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24小时
 
 const STEVE_SKIN_LOCAL_PATH = path.join(__dirname, 'img', 'steve_head.png');
+const APP_IMG_DIR = path.join(__dirname, 'img');
 let cachedSteveHead = null;
 let steveHeadPromise = null;
+
+function resolveSkinPath(skinFile) {
+    if (!skinFile) return null;
+    const userDataPath = path.join(DATA_DIR, 'img', skinFile);
+    if (fs.existsSync(userDataPath)) return userDataPath;
+    const appPath = path.join(APP_IMG_DIR, skinFile);
+    if (fs.existsSync(appPath)) return appPath;
+    return null;
+}
 
 async function getSteveHeadLocal() {
     if (cachedSteveHead) return cachedSteveHead;
@@ -1154,6 +1164,7 @@ let terracottaHttpPort = 0;
 let terracottaPortFilePath = '';
 let terracottaStatus = { running: false, mode: null, roomCode: '', virtualIP: '', gamePort: 0, state: null, stateIndex: -1 };
 let terracottaPublicNodes = null;
+let terracottaPublicNodesExpiry = 0;
 
 function generateInvitationCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1258,15 +1269,17 @@ async function ensureTerracottaInstalled() {
     return false;
 }
 
-async function fetchTerracottaPublicNodes() {
-    if (terracottaPublicNodes) return terracottaPublicNodes;
+async function fetchTerracottaPublicNodes(forceRefresh = false) {
+    if (!forceRefresh && terracottaPublicNodes && Date.now() < terracottaPublicNodesExpiry) return terracottaPublicNodes;
     try {
-        const nodeUrl = 'https://terracotta.glavo.site/nodes';
-        const resp = await fetchJSON(nodeUrl);
-        if (Array.isArray(resp)) {
-            terracottaPublicNodes = resp
-                .filter(n => n && n.url)
-                .map(n => n.url);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000);
+        const resp = await fetch('https://terracotta.glavo.site/nodes', { signal: controller.signal });
+        clearTimeout(timeout);
+        const data = await resp.json();
+        if (Array.isArray(data)) {
+            terracottaPublicNodes = data.filter(n => n && n.url).map(n => n.url);
+            terracottaPublicNodesExpiry = Date.now() + 3600000;
         }
     } catch (e) {
         console.error('[Terracotta] Failed to fetch public nodes:', e.message);
@@ -1278,6 +1291,7 @@ async function fetchTerracottaPublicNodes() {
             'tcp://easytier.1-hub.com:11010',
             'udp://easytier.1-hub.com:11010'
         ];
+        terracottaPublicNodesExpiry = Date.now() + 600000;
     }
     return terracottaPublicNodes;
 }
@@ -1293,15 +1307,19 @@ async function terracottaHttpGet(endpoint, params = {}) {
         }
     });
     return new Promise((resolve, reject) => {
-        const req = http.get(urlObj.toString(), { timeout: 10000 }, (res) => {
+        const req = http.get(urlObj.toString(), { timeout: 30000 }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    reject(new Error(`Terracotta API HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+                    return;
+                }
                 try {
                     const parsed = JSON.parse(data);
                     resolve(parsed);
                 } catch (e) {
-                    reject(new Error(`Terracotta API parse error: ${e.message}`));
+                    reject(new Error(`Terracotta API parse error: ${data.slice(0, 200)}`));
                 }
             });
         });
@@ -1444,25 +1462,29 @@ function getPlayerName() {
     return 'Player';
 }
 
-async function terracottaStartHost(gamePort) {
+async function terracottaStartHost(gamePort, playerName) {
     const port = await startTerracotta();
     const nodes = await fetchTerracottaPublicNodes();
 
     terracottaStatus.mode = 'host';
     terracottaStatus.gamePort = gamePort;
 
-    const playerName = getPlayerName();
+    const name = playerName || getPlayerName();
     const params = {
-        player: playerName,
+        player: name,
         public_nodes: nodes,
         game_port: gamePort
     };
 
-    try {
-        await terracottaHttpGet('/state/scanning', params);
-    } catch (e) {
-        stopTerracotta();
-        throw e;
+    for (let retry = 0; retry < 3; retry++) {
+        try {
+            await new Promise(r => setTimeout(r, 1000 + retry * 500));
+            await terracottaHttpGet('/state/scanning', params);
+            break;
+        } catch (e) {
+            console.warn(`[Terracotta] /state/scanning attempt ${retry + 1} failed: ${e.message}`);
+            if (retry === 2) throw e;
+        }
     }
 
     _terracottaSavedMode = 'host';
@@ -1473,24 +1495,28 @@ async function terracottaStartHost(gamePort) {
     return { success: true, httpPort: port };
 }
 
-async function terracottaStartGuest(roomCode) {
+async function terracottaStartGuest(roomCode, playerName) {
     const port = await startTerracotta();
     const nodes = await fetchTerracottaPublicNodes();
 
     terracottaStatus.mode = 'guest';
 
-    const playerName = getPlayerName();
+    const name = playerName || getPlayerName();
     const params = {
         room: roomCode,
-        player: playerName,
+        player: name,
         public_nodes: nodes
     };
 
-    try {
-        await terracottaHttpGet('/state/guesting', params);
-    } catch (e) {
-        stopTerracotta();
-        throw e;
+    for (let retry = 0; retry < 3; retry++) {
+        try {
+            await new Promise(r => setTimeout(r, 1000 + retry * 500));
+            await terracottaHttpGet('/state/guesting', params);
+            break;
+        } catch (e) {
+            console.warn(`[Terracotta] /state/guesting attempt ${retry + 1} failed: ${e.message}`);
+            if (retry === 2) throw e;
+        }
     }
 
     _terracottaSavedMode = 'guest';
@@ -1609,10 +1635,13 @@ async function getTerracottaState() {
                     terracottaStatus.errorType = errInfo.key;
                     terracottaStatus.errorMessage = errInfo.msg;
                 }
+            } else {
+                terracottaStatus.errorType = null;
+                terracottaStatus.errorMessage = null;
             }
 
-            if (state.profiles) {
-                terracottaStatus.profiles = state.profiles;
+            if (state.state !== 'host-ok' && state.state !== 'guest-ok') {
+                terracottaStatus.profiles = state.profiles || [];
             }
             if (state.difficulty !== undefined) {
                 terracottaStatus.difficulty = state.difficulty;
@@ -6294,6 +6323,61 @@ function getTemurinMirrorUrl(githubUrl, osName = 'windows', arch = 'x64') {
     return mirrors;
 }
 
+const LIBERICA_BASE = 'https://download.bell-sw.com/java/';
+
+async function getLibericaLatestVersion(majorVersion) {
+    const arch = process.platform === 'win32' ? 'amd64' : (process.arch === 'arm64' ? 'aarch64' : 'amd64');
+    const os = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'macos' : 'linux');
+    const pkgType = process.platform === 'win32' ? 'zip' : 'tar.gz';
+
+    const pageUrl = 'https://bell-sw.com/pages/downloads/';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+        const resp = await fetch(pageUrl, { signal: controller.signal });
+        clearTimeout(timer);
+        const html = await resp.text();
+
+        const versionRegex = /bellsoft-jdk([\d.+]+)-linux-amd64\.tar\.gz/g;
+        const allVersions = [];
+        let m;
+        while ((m = versionRegex.exec(html)) !== null) {
+            const ver = m[1];
+            const major = parseInt(ver.split('.')[0], 10);
+            if (major === majorVersion) allVersions.push(ver);
+        }
+        if (allVersions.length === 0) return null;
+
+        allVersions.sort().reverse();
+        const latestVer = allVersions[0];
+
+        const testFileName = `bellsoft-jdk${latestVer}-${os}-${arch}.${pkgType}`;
+        const testUrl = `${LIBERICA_BASE}${latestVer.replace(/\+/g, '%2B')}/${testFileName}`;
+
+        const h2 = new AbortController();
+        const t2 = setTimeout(() => h2.abort(), 8000);
+        const r2 = await fetch(testUrl, { method: 'HEAD', signal: h2.signal });
+        clearTimeout(t2);
+
+        if (!r2.ok) {
+            const altUrl = `${LIBERICA_BASE}${latestVer}/${testFileName}`;
+            const h3 = new AbortController();
+            const t3 = setTimeout(() => h3.abort(), 8000);
+            const r3 = await fetch(altUrl, { method: 'HEAD', signal: h3.signal });
+            clearTimeout(t3);
+            if (!r3.ok) return null;
+            const size = parseInt(r3.headers.get('content-length'), 10) || 0;
+            return { downloadUrl: altUrl, fileName: testFileName, size };
+        }
+
+        const size = parseInt(r2.headers.get('content-length'), 10) || 0;
+        return { downloadUrl: testUrl, fileName: testFileName, size };
+    } catch (e) {
+        clearTimeout(timer);
+        throw e;
+    }
+}
+
 async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorIndex = 0) {
     const updateStatus = (status, progress, message = '', speed = 0, downloadedBytes = 0, totalBytes = 0) => {
         try {
@@ -6397,6 +6481,21 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
                 console.warn(`[Java] Adoptium API失败: ${e.message}`);
             }
         }
+
+        if (!downloadUrl) {
+            updateStatus('fetching', 5, '正在尝试BellSoft Liberica...');
+            try {
+                const bellsoftVersion = await getLibericaLatestVersion(majorVersion);
+                if (bellsoftVersion) {
+                    downloadUrl = bellsoftVersion.downloadUrl;
+                    fileName = bellsoftVersion.fileName;
+                    totalSize = bellsoftVersion.size || 0;
+                    console.log(`[Java] Liberica JDK ${majorVersion}: ${downloadUrl.substring(0, 80)}...`);
+                }
+            } catch (e) {
+                console.warn(`[Java] BellSoft Liberica失败: ${e.message}`);
+            }
+        }
         
         if (!downloadUrl) {
             throw new Error(`未找到JDK ${majorVersion}的下载信息，所有源均不可用（请检查网络连接或VPN）`);
@@ -6418,7 +6517,8 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
 
         const tempFile = path.join(DATA_DIR, fileName);
 
-        updateStatus('downloading', 10, `正在下载Temurin JDK ${majorVersion}...`);
+        const jdkSource = downloadUrl.includes('bell-sw.com') ? 'Liberica' : 'Temurin';
+        updateStatus('downloading', 10, `正在下载${jdkSource} JDK ${majorVersion}...`);
 
         let peakBytes = 0;
         const calcPct = (progress) => {
@@ -6441,9 +6541,9 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
             const dlMB = (progress.bytesDownloaded / 1024 / 1024).toFixed(1);
             if (tb > 0) {
                 const totalMB = (tb / 1024 / 1024).toFixed(1);
-                return `正在下载Temurin JDK ${majorVersion}... ${dlMB}MB / ${totalMB}MB`;
+                return `正在下载${jdkSource} JDK ${majorVersion}... ${dlMB}MB / ${totalMB}MB`;
             }
-            return `正在下载Temurin JDK ${majorVersion}... ${dlMB}MB 已下载`;
+            return `正在下载${jdkSource} JDK ${majorVersion}... ${dlMB}MB 已下载`;
         };
         let _lastDlBytes = 0, _lastDlTime = Date.now(), _smoothSpeed = 0;
         const onDlProgress = (progress) => {
@@ -6696,7 +6796,11 @@ function detectBundledJava() {
                     const match = content.match(/JAVA_VERSION="([^"]+)"/);
                     if (match) {
                         version = match[1];
-                        majorVersion = parseInt(version.split('.')[0], 10);
+                        if (version.startsWith('1.')) {
+                            majorVersion = parseInt(version.split('.')[1], 10);
+                        } else {
+                            majorVersion = parseInt(version.split('.')[0], 10);
+                        }
                     }
                 }
 
@@ -8351,8 +8455,8 @@ function injectOfflineSkin(versionJson, account, assetsRoot) {
     const backups = [];
     try {
         if (!account || account.type !== 'offline' || !account.skinFile) return backups;
-        const skinPath = path.join(DATA_DIR, 'img', account.skinFile);
-        if (!fs.existsSync(skinPath)) return backups;
+        const skinPath = resolveSkinPath(account.skinFile);
+        if (!skinPath) return backups;
         const skinBuf = fs.readFileSync(skinPath);
         if (!skinBuf || skinBuf.length < 64) return backups;
 
@@ -8613,11 +8717,15 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
             }
         } catch(e) {}
 
-        if (maxMemMB >= 8192 && javaMajorVer >= 21) {
+        if (maxMemMB >= 8192 && javaMajorVer >= 21 && javaMajorVer <= 23) {
+            // ZGC + Generational ZGC (Java 21-23 only; removed in Java 24+)
             jvmArgs.push('-XX:+UseZGC', '-XX:+ZGenerational', '-XX:SoftMaxHeapSize=' + Math.floor(maxMemMB * 0.75) + 'M');
             if (modCount > 100) {
                 jvmArgs.push('-XX:ZAllocationSpikeTolerance=2');
             }
+        } else if (maxMemMB >= 8192 && javaMajorVer >= 24) {
+            // Java 24+: ZGC is generational by default, no extra flags needed
+            jvmArgs.push('-XX:+UseZGC');
         } else if (maxMemMB >= 4096 && javaMajorVer >= 15 && modCount > 80) {
             jvmArgs.push('-XX:+UseShenandoahGC', '-XX:ShenandoahGCHeuristics=compact');
         } else if (maxMemMB <= 1024) {
@@ -8635,7 +8743,12 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
     }
     const hasUserMemOpt = jvmArgs.some(a => a.includes('StringDeduplication') || a.includes('CompressedClassSpaceSize') || a.includes('MetaspaceSize'));
     if (!hasUserMemOpt && maxMemMB >= 2048) {
-        jvmArgs.push('-XX:+UseStringDeduplication', '-XX:CompressedClassSpaceSize=256m', '-XX:MaxMetaspaceSize=512m');
+        // -XX:+UseStringDeduplication only works with G1GC (not ZGC/Shenandoah)
+        const usingG1 = jvmArgs.some(a => a.includes('UseG1GC'));
+        if (usingG1) {
+            jvmArgs.push('-XX:+UseStringDeduplication');
+        }
+        jvmArgs.push('-XX:CompressedClassSpaceSize=256m', '-XX:MaxMetaspaceSize=512m');
     }
 
     if (settings.javaArgs && settings.javaArgs.trim()) {
@@ -8709,7 +8822,9 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
         jvmArgs.push('-Dfml.earlyprogresswindow=false');
     }
 
-    if (isForge || isNeoForge) {
+    // JPMS module flags (--add-exports/--add-opens) only work on Java 9+
+    // Java 8 will crash with "Unrecognized option: --add-exports"
+    if ((isForge || isNeoForge) && javaMajorVer >= 9) {
         const jpmsFlags = [
             '--add-exports java.base/sun.security.util=ALL-UNNAMED',
             '--add-exports java.base/sun.security.x509=ALL-UNNAMED',
@@ -9125,18 +9240,6 @@ async function launchGame(versionId, settings, account) {
     let externalVersionDir = null;
     const cleanVersionId = versionId.replace(' [外部]', '');
 
-    const gameDirToCheck = settings.gameDir || DATA_DIR;
-    const problematicChars = /[^\x00-\x7F]/;
-    const dirBasename = path.basename(gameDirToCheck);
-    if (problematicChars.test(dirBasename)) {
-        const badChars = dirBasename.match(problematicChars);
-        return { success: false, error: `游戏路径包含特殊字符（${[...new Set(badChars)].join(' ')}），可能导致游戏无法启动，请将游戏移到纯英文路径` };
-    }
-    const javaPathToCheck = settings.javaPath || '';
-    if (javaPathToCheck && problematicChars.test(path.dirname(javaPathToCheck))) {
-        return { success: false, error: 'Java路径包含特殊字符或中文，可能导致游戏无法启动，请将Java移到纯英文路径' };
-    }
-
     const externalFolders = loadExternalFolders();
     for (const folder of externalFolders) {
         if (!fs.existsSync(folder.path)) continue;
@@ -9151,6 +9254,30 @@ async function launchGame(versionId, settings, account) {
     }
 
     console.log(`[LaunchGame] 版本: ${versionId}, 外部目录: ${externalVersionDir || '无'}`);
+
+    let actualGameDir;
+    if (externalVersionDir) {
+        actualGameDir = externalVersionDir;
+    } else {
+        const settingsVersionId = cleanVersionId;
+        const effectiveIsolation = resolveVersionIsolation(settingsVersionId);
+        if (effectiveIsolation) {
+            actualGameDir = path.join(VERSIONS_DIR, cleanVersionId);
+        } else {
+            actualGameDir = settings.gameDir || DATA_DIR;
+        }
+    }
+    const gameDirBasename = path.basename(actualGameDir);
+    if (gameDirBasename.includes('!') || gameDirBasename.includes(';')) {
+        return { success: false, error: `游戏路径中不可包含 ! 或 ;（${actualGameDir}）` };
+    }
+    const javaPathToCheck = settings.javaPath || '';
+    if (javaPathToCheck) {
+        const javaDir = path.dirname(javaPathToCheck);
+        if (javaDir.includes('!') || javaDir.includes(';')) {
+            return { success: false, error: `Java路径中不可包含 ! 或 ;（${javaPathToCheck}）` };
+        }
+    }
 
     const versionJson = resolveVersionJson(cleanVersionId, externalVersionDir);
     if (!versionJson) {
@@ -10255,7 +10382,8 @@ async function ensureBaseVersionInstalled(gameVersion, onProgress = null) {
                 const libs = existingJson.libraries || [];
                 let checkedCount = 0;
                 for (const lib of libs) {
-                    if (checkedCount >= 3) break;
+                    if (checkedCount >= 5) break;
+                    if (lib.rules && !evaluateRules(lib.rules)) continue;
                     const artifactPath = lib.downloads?.artifact?.path;
                     if (artifactPath) {
                         checkedCount++;
@@ -10404,8 +10532,10 @@ async function ensureBaseVersionInstalled(gameVersion, onProgress = null) {
         
         report('正在校验库文件...', 72);
         const missingLibs = [];
-        const libsToVerify = (versionDetails.libraries || []).filter(l => l.downloads?.artifact?.path);
-        for (let i = 0; i < Math.min(3, libsToVerify.length); i++) {
+        const libsToVerify = (versionDetails.libraries || []).filter(l =>
+            l.downloads?.artifact?.path && !(l.rules && !evaluateRules(l.rules))
+        );
+        for (let i = 0; i < Math.min(5, libsToVerify.length); i++) {
             const lib = libsToVerify[i];
             const libFile = path.join(LIBRARIES_DIR, lib.downloads.artifact.path);
             if (!fs.existsSync(libFile)) {
@@ -10642,6 +10772,7 @@ function verifyLoaderLibs(versionId) {
         let checked = 0, missing = 0;
         const missingPaths = [];
         for (const lib of libs) {
+            if (lib.rules && !evaluateRules(lib.rules)) continue;
             let libPath = null;
             if (lib.downloads?.artifact?.path) {
                 libPath = path.join(LIBRARIES_DIR, lib.downloads.artifact.path);
@@ -12821,15 +12952,30 @@ async function handleHttpRequest(pathname, req, res, parsedUrl) {
  * @param {string} targetVersion - 目标版本ID（版本隔离）
  */
 async function importModpackFromPath(filePath, onProgress, targetVersion = '', abortSignal = null) {
+    const stageHistory = [];
     const progress = (stage, message, pct, files, currentFile) => {
-        if (typeof onProgress === 'function') onProgress({ stage, message, progress: pct, files: files || [], currentFile: currentFile || '' });
+        const existingIdx = stageHistory.findIndex(s => s.stage === stage);
+        if (existingIdx >= 0) {
+            stageHistory[existingIdx].progress = pct;
+            stageHistory[existingIdx].message = message;
+        } else {
+            stageHistory.push({ stage, message, progress: pct });
+        }
+        console.log(`[Modpack][${stage}] ${message} (${pct}%)` + (currentFile ? ` - ${currentFile}` : ''));
+        if (typeof onProgress === 'function') onProgress({ stage, message, progress: pct, files: files || [], currentFile: currentFile || '', stageHistory: stageHistory.map(s => ({ ...s })) });
     };
 
+    console.log(`[Modpack] ========== 开始导入整合包 ==========`);
+    console.log(`[Modpack] 文件路径: ${filePath}`);
+    console.log(`[Modpack] 目标版本: ${targetVersion || '(自动)'}`);
+
     if (!filePath || !fs.existsSync(filePath)) {
+        console.error(`[Modpack] 文件不存在: ${filePath}`);
         return { success: false, error: '文件不存在: ' + filePath };
     }
     const ext = path.extname(filePath).toLowerCase();
     if (ext !== '.mrpack' && ext !== '.zip') {
+        console.error(`[Modpack] 不支持的文件格式: ${ext}`);
         return { success: false, error: '不支持的文件格式，请拖入 .mrpack 或 .zip 整合包' };
     }
 
@@ -12837,11 +12983,14 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
 
     let AdmZip;
     try { AdmZip = getAdmZip(); } catch (e) {
+        console.error(`[Modpack] 加载 AdmZip 失败:`, e.message);
         return { success: false, error: e.message };
     }
 
     const fileStat = fs.statSync(filePath);
+    console.log(`[Modpack] 文件大小: ${(fileStat.size / 1024 / 1024).toFixed(1)} MB`);
     if (fileStat.size < 1024) {
+        console.error(`[Modpack] 文件太小: ${fileStat.size} 字节`);
         return { success: false, error: '文件太小（' + fileStat.size + ' 字节），可能下载不完整' };
     }
     const fd = fs.openSync(filePath, 'r');
@@ -12849,11 +12998,13 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
     fs.readSync(fd, magicBuf, 0, 4, 0);
     fs.closeSync(fd);
     if (magicBuf[0] !== 0x50 || magicBuf[1] !== 0x4B || magicBuf[2] !== 0x03 || magicBuf[3] !== 0x04) {
+        console.error(`[Modpack] ZIP magic bytes 无效: ${magicBuf.toString('hex')}`);
         return { success: false, error: '文件格式无效（不是有效的 ZIP 文件），可能下载损坏' };
     }
 
     let zip;
     try { zip = new AdmZip(filePath); } catch (e) {
+        console.error(`[Modpack] 无法读取 ZIP:`, e.message);
         return { success: false, error: '无法读取 ZIP 文件: ' + e.message };
     }
 
@@ -12861,71 +13012,46 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
     const curseEntry    = zip.getEntry('manifest.json');
 
     let result;
-    const MAX_IMPORT_RETRIES = 3;
     const tempFiles = [];
-    for (let importAttempt = 1; importAttempt <= MAX_IMPORT_RETRIES; importAttempt++) {
-        try {
-            if (modrinthEntry) {
-                result = await _importMrpack(zip, modrinthEntry, filePath, progress, targetVersion, abortSignal);
-            } else if (curseEntry) {
-                result = await _importCurseForge(zip, curseEntry, filePath, progress, targetVersion, abortSignal);
-            } else {
-                result = await _importRawZip(zip, filePath, progress, targetVersion, abortSignal);
-            }
-            
-            if (result && result.success) break;
-            if (result && !result.success && importAttempt < MAX_IMPORT_RETRIES) {
-                console.log(`[Modpack] 导入失败，尝试第 ${importAttempt + 1} 次...`);
-                if (result.versionId) {
-                    cleanupVersionChain(result.versionId);
-                    console.log(`[Modpack] 清理版本链: ${result.versionId}`);
-                }
-                if (result.loaderVersionId) {
-                    try {
-                        const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
-                        if (fs.existsSync(loaderDir)) {
-                            fs.rmSync(loaderDir, { recursive: true, force: true });
-                            console.log(`[Modpack] 清理加载器目录: ${result.loaderVersionId}`);
-                        }
-                    } catch (ce) {
-                        console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
-                    }
-                }
-                await new Promise(r => setTimeout(r, 2000 * importAttempt));
-                continue;
-            }
-        } catch (e) {
-            console.error(`[Modpack] Import attempt ${importAttempt} failed:`, e.message);
-            if (importAttempt >= MAX_IMPORT_RETRIES) {
-                if (result && result.versionId) {
-                    cleanupVersionChain(result.versionId);
-                    console.log(`[Modpack] 最终失败，清理版本链: ${result.versionId}`);
-                }
-                if (result && result.loaderVersionId) {
-                    try {
-                        const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
-                        if (fs.existsSync(loaderDir)) {
-                            fs.rmSync(loaderDir, { recursive: true, force: true });
-                            console.log(`[Modpack] 最终失败，清理加载器目录: ${result.loaderVersionId}`);
-                        }
-                    } catch (ce) {
-                        console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
-                    }
-                }
-                for (const tmp of tempFiles) {
-                    try {
-                        if (fs.existsSync(tmp)) fs.rmSync(tmp, { recursive: true, force: true });
-                    } catch (te) {}
-                }
-                return { success: false, error: '整合包导入失败: ' + e.message };
-            }
-            await new Promise(r => setTimeout(r, 2000 * importAttempt));
+    try {
+        if (modrinthEntry) {
+            console.log(`[Modpack] 检测到 Modrinth 整合包 (.mrpack)`);
+            result = await _importMrpack(zip, modrinthEntry, filePath, progress, targetVersion, abortSignal);
+        } else if (curseEntry) {
+            console.log(`[Modpack] 检测到 CurseForge 整合包`);
+            result = await _importCurseForge(zip, curseEntry, filePath, progress, targetVersion, abortSignal);
+        } else {
+            console.log(`[Modpack] 未检测到已知整合包格式，尝试作为普通 ZIP 导入`);
+            result = await _importRawZip(zip, filePath, progress, targetVersion, abortSignal);
         }
+    } catch (e) {
+        console.error(`[Modpack] Import exception:`, e.stack || e.message);
+        if (result && result.versionId) {
+            cleanupVersionChain(result.versionId);
+            console.log(`[Modpack] Cleaned up failed version chain: ${result.versionId}`);
+        }
+        if (result && result.loaderVersionId) {
+            try {
+                const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
+                if (fs.existsSync(loaderDir)) {
+                    fs.rmSync(loaderDir, { recursive: true, force: true });
+                    console.log(`[Modpack] 清理加载器目录: ${result.loaderVersionId}`);
+                }
+            } catch (ce) {
+                console.error(`[Modpack] 清理加载器目录失败: ${ce.message}`);
+            }
+        }
+        for (const tmp of tempFiles) {
+            try {
+                if (fs.existsSync(tmp)) fs.rmSync(tmp, { recursive: true, force: true });
+            } catch (te) {}
+        }
+        return { success: false, error: '整合包导入失败: ' + e.message, stageHistory };
     }
     
     if (result && !result.success && result.versionId) {
+        console.error(`[Modpack] 导入失败，清理版本链: ${result.versionId}`);
         cleanupVersionChain(result.versionId);
-        console.log(`[Modpack] Cleaned up failed version chain: ${result.versionId}`);
         if (result.loaderVersionId) {
             try {
                 const loaderDir = path.join(VERSIONS_DIR, result.loaderVersionId);
@@ -12939,15 +13065,26 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
         }
     }
     
+    if (result?.success) {
+        console.log(`[Modpack] ========== 导入成功 ==========`);
+        console.log(`[Modpack] 版本ID: ${result.versionId}`);
+        console.log(`[Modpack] 整合包名: ${result.name}`);
+    } else {
+        console.error(`[Modpack] ========== 导入失败 ==========`);
+        console.error(`[Modpack] 错误: ${result?.error}`);
+    }
+
     return result;
 }
 
 async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersion = '', abortSignal = null) {
+    console.log(`[mrpack] ========== 开始解析 Modrinth 整合包 ==========`);
     const settings = loadSettingsCached();
     let manifest;
     try {
         manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
     } catch (e) {
+        console.error(`[mrpack] 解析 modrinth.index.json 失败:`, e.message);
         return { success: false, error: '解析 modrinth.index.json 失败: ' + e.message };
     }
 
@@ -12961,6 +13098,13 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         forgeVer = forgeVer.slice(mcVersion.length + 1);
         console.log(`[mrpack] Forge 版本标准化: ${manifest.dependencies.forge} -> ${forgeVer}`);
     }
+
+    console.log(`[mrpack] 整合包: ${packName}`);
+    console.log(`[mrpack] MC版本: ${mcVersion || '(未指定)'}`);
+    console.log(`[mrpack] Fabric: ${fabricVer || '(无)'}`);
+    console.log(`[mrpack] Forge: ${forgeVer || '(无)'}`);
+    console.log(`[mrpack] NeoForge: ${neoforgeVer || '(无)'}`);
+    console.log(`[mrpack] 文件数量: ${(manifest.files || []).length}`);
 
     progress('prepare', `整合包: ${packName}  MC: ${mcVersion}`, 8);
 
@@ -13005,6 +13149,8 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         fs.mkdirSync(versionDir, { recursive: true });
     }
 
+    let loaderVersionId = null;
+
     if (isNewVersionDir) {
         progress('base', '正在准备基础版本...', 10);
         console.log(`[mrpack] 确保基础版本存在: ${mcVersion}`);
@@ -13016,7 +13162,6 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
             return { success: false, versionId, error: baseResult.error };
         }
 
-        let loaderVersionId = null;
         if (forgeVer || neoforgeVer || fabricVer) {
             progress('loader-install', '正在安装模组加载器...', 12);
             try {
@@ -13572,11 +13717,13 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
 }
 
 async function _importCurseForge(zip, manifestEntry, filePath, progress, targetVersion = '', abortSignal = null) {
+    console.log(`[CurseForge] ========== 开始解析 CurseForge 整合包 ==========`);
     const settings = loadSettingsCached();
     let manifest;
     try {
         manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
     } catch (e) {
+        console.error(`[CurseForge] 解析 manifest.json 失败:`, e.message);
         return { success: false, error: '解析 manifest.json 失败: ' + e.message };
     }
 
@@ -13609,6 +13756,10 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
     }
     
     console.log(`[CurseForge] 解析 modLoader: "${modLoader}" -> forge=${forgeVerCF}, fabric=${fabricVerCF}, neoforge=${neoforgeVerCF}`);
+
+    console.log(`[CurseForge] 整合包: ${packName}`);
+    console.log(`[CurseForge] MC版本: ${mcVersion || '(未指定)'}`);
+    console.log(`[CurseForge] Mod数量: ${(manifest.files || []).length}`);
 
     progress('prepare', `整合包: ${packName}  MC: ${mcVersion}`, 8);
 
@@ -13655,6 +13806,8 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
 
     const cfApiKey = settings.curseforgeApiKey || '$2a$10$bL4bIL5pUWqfcO7KQtnMReakwtfHbNKh6v1uTpKlzhwoueEJQnPnm';
 
+    let loaderVersionId = null;
+
     if (isNewVersionDirCF) {
         console.log(`[CurseForge] 确保基础版本存在: ${mcVersion}`);
         progress('base', '正在准备基础版本...', 10);
@@ -13666,7 +13819,6 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
             return { success: false, versionId, error: baseResult.error };
         }
 
-        let loaderVersionId = null;
         if (forgeVerCF || neoforgeVerCF || fabricVerCF) {
             progress('loader-install', '正在安装模组加载器...', 12);
             try {
@@ -17793,10 +17945,21 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     const metadataUrl = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
                     console.log('[Forge] Fetching metadata from:', metadataUrl);
                     let metadataXml = null;
-                    for (const tryUrl of getMirrorUrls(metadataUrl)) {
+                    const forgeUrls = [
+                        metadataUrl,
+                        'https://mirror.ghproxy.com/' + metadataUrl
+                    ];
+                    for (const tryUrl of forgeUrls) {
                         try {
-                            metadataXml = await fetchText(tryUrl);
-                            if (metadataXml) { console.log('[Forge] Got metadata from:', tryUrl); break; }
+                            const xml = await fetchText(tryUrl);
+                            if (!xml) continue;
+                            const testMatches = xml.match(new RegExp(`<version>${gameVersion.replace(/\./g, '\\.')}-[^<]+<\\/version>`, 'g'));
+                            if (testMatches && testMatches.length > 0) {
+                                metadataXml = xml;
+                                console.log('[Forge] Got metadata from:', tryUrl, `(${testMatches.length} versions for ${gameVersion})`);
+                                break;
+                            }
+                            console.log('[Forge] Metadata from', tryUrl, 'has no versions for', gameVersion, ', trying next...');
                         } catch (e) { console.log('[Forge] Metadata fetch failed from:', tryUrl, e.message); }
                     }
                     if (!metadataXml) throw new Error('所有Forge元数据源均不可用');
@@ -17823,7 +17986,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         if (versions.length > 1) versions[1].type = '最新';
                     }
                     
-                    sendJSON({ versions: versions.slice(0, 10) });
+                    sendJSON({ versions: versions.slice(0, 30) });
                 } catch (e) {
                     console.error('[Forge] Error fetching versions:', e.message);
                     sendJSON({ versions: [] });
@@ -17977,8 +18140,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         const accounts = loadAccounts();
                         const acc = accounts.find(a => (a.uuid || '').replace(/-/g, '') === cleanUuid);
                         if (acc && acc.skinFile) {
-                            const skinPath = path.join(DATA_DIR, 'img', acc.skinFile);
-                            if (fs.existsSync(skinPath)) {
+                            const skinPath = resolveSkinPath(acc.skinFile);
+                            if (skinPath) {
                                 const skinBuf = fs.readFileSync(skinPath);
                                 offlineHead = await cropSkinToHeadWithSharp(skinBuf);
                             }
@@ -18044,18 +18207,24 @@ async function handleAPI(pathname, req, res, parsedUrl) {
 
             case '/api/skin-head': {
                 const headId = parsedUrl.query.id || '';
-                if (!headId) { sendError('Missing id', 400); break; }
-                const headSkinMap = {
-                    steve: 'steve_skin.png',
-                    alex: 'skin_alex.png',
-                    zombie: 'skin_zombie.png',
-                    enderman: 'skin_enderman.png',
-                    creeper: 'skin_creeper.png'
-                };
-                const headFile = headSkinMap[headId];
+                const customFile = parsedUrl.query.file || '';
+                if (!headId && !customFile) { sendError('Missing id', 400); break; }
+                let headFile = '';
+                if (customFile) {
+                    headFile = customFile;
+                } else {
+                    const headSkinMap = {
+                        steve: 'steve_skin.png',
+                        alex: 'skin_alex.png',
+                        zombie: 'skin_zombie.png',
+                        enderman: 'skin_enderman.png',
+                        creeper: 'skin_creeper.png'
+                    };
+                    headFile = headSkinMap[headId];
+                }
                 if (!headFile) { sendError('Invalid skin id', 400); break; }
-                const headPath = path.join(__dirname, 'img', headFile);
-                if (!fs.existsSync(headPath)) { sendError('Skin not found', 404); break; }
+                const headPath = resolveSkinPath(headFile);
+                if (!headPath) { sendError('Skin not found', 404); break; }
                 const headBuf = fs.readFileSync(headPath);
                 res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
                 res.end(headBuf);
@@ -18150,12 +18319,14 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         if (!acc) { sendError('Account not found', 404); return; }
                         let metadata;
                         try {
-                            metadata = await sharp(skinBuf).metadata();
+                            const sharpLib = require('sharp');
+                            metadata = await sharpLib(skinBuf).metadata();
                         } catch (e) { sendError('Invalid PNG', 400); return; }
                         const isStandardSize = (metadata.width === 64 && (metadata.height === 64 || metadata.height === 32));
                         if (!isStandardSize) {
                             try {
-                                skinBuf = await sharp(skinBuf).resize(64, 64, { kernel: 'nearest' }).png().toBuffer();
+                                const sharpLib2 = require('sharp');
+                                skinBuf = await sharpLib2(skinBuf).resize(64, 64, { kernel: 'nearest' }).png().toBuffer();
                                 console.log(`[Upload] Resized skin from ${metadata.width}x${metadata.height} to 64x64`);
                             } catch (resizeErr) {
                                 console.warn('[Upload] Sharp resize failed, saving original size:', resizeErr.message);
@@ -18216,8 +18387,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         if (acc && acc.skinFile) stSkinFile = acc.skinFile;
                     } catch (e) {}
                     if (stSkinFile) {
-                        const skinPath = path.join(DATA_DIR, 'img', stSkinFile);
-                        if (fs.existsSync(skinPath)) {
+                        const skinPath = resolveSkinPath(stSkinFile);
+                        if (skinPath) {
                             const data = fs.readFileSync(skinPath);
                             AVATAR_CACHE.set(stCacheKey, { data, contentType: 'image/png', time: Date.now() });
                             serveStImage(data, 'image/png');
@@ -18245,7 +18416,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 const versionId = parsedUrl.query.id || '';
                 if (!versionId) { sendError('Missing id', 400); break; }
 
-                const cacheKey = `${versionId}_${parsedUrl.query.type || 'release'}_${parsedUrl.query.forge || ''}_${parsedUrl.query.fabric || ''}_${parsedUrl.query.neoforge || ''}`;
+                const cacheKey = `${versionId}_${parsedUrl.query.type || 'release'}_${parsedUrl.query.forge || ''}_${parsedUrl.query.fabric || ''}_${parsedUrl.query.neoforge || ''}_${parsedUrl.query.modpack || ''}`;
                 const cached = VERSION_ICON_CACHE.get(cacheKey);
                 if (cached && Date.now() - cached.time < VERSION_ICON_CACHE_DURATION) {
                     res.writeHead(200, {
@@ -18610,7 +18781,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 const etGamePort = etHostData.gamePort || 25565;
                 
                 try {
-                    const result = await terracottaStartHost(etGamePort);
+                    const result = await terracottaStartHost(etGamePort, etHostData.playerName);
                     sendJSON({ success: true, ...result });
                 } catch (e) {
                     sendError('创建联机失败: ' + e.message);
@@ -18628,7 +18799,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 }
                 
                 try {
-                    const result = await terracottaStartGuest(etGuestRoomCode);
+                    const result = await terracottaStartGuest(etGuestRoomCode, etGuestData.playerName);
                     sendJSON({ success: true, ...result });
                 } catch (e) {
                     sendError('加入联机失败: ' + e.message);
@@ -19689,6 +19860,12 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                         session.message = `下载 ${safeName} ${p.progress.toFixed(0)}%`;
                                         session.currentFile = safeName;
                                         session.phase = 'download';
+                                        if (rdType === 'modpack') {
+                                            if (!session.stageHistory) session.stageHistory = [];
+                                            const dlIdx = session.stageHistory.findIndex(s => s.stage === 'download');
+                                            const dlStage = { stage: 'download', message: `下载整合包 ${safeName}`, progress: Math.round(p.progress) };
+                                            if (dlIdx >= 0) { session.stageHistory[dlIdx] = dlStage; } else { session.stageHistory.push(dlStage); }
+                                        }
                                         if (session.files && session.files[0]) {
                                             session.files[0].progress = Math.round(p.progress);
                                             session.files[0].status = 'downloading';
@@ -19734,6 +19911,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                             s.phase = p.stage || 'install';
                                             s.currentFile = p.currentFile || '';
                                             if (p.files && p.files.length > 0) s.files = p.files;
+                                            if (p.stageHistory && p.stageHistory.length > 0) s.stageHistory = p.stageHistory;
                                         }
                                     }, rdType === 'modpack' ? '' : targetVersionId, abortController.signal);
 
