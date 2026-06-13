@@ -1098,6 +1098,28 @@ function extractSkinUrlFromAuthResult(authResult) {
     return null;
 }
 
+function extractSkinModelFromAuthResult(authResult) {
+    try {
+        const sources = [
+            authResult?.selectedProfile?.properties,
+            authResult?.user?.properties
+        ];
+        for (const properties of sources) {
+            if (!properties) continue;
+            const texturesProp = properties.find(p => p.name === 'textures');
+            if (texturesProp && texturesProp.value) {
+                try {
+                    const decoded = JSON.parse(Buffer.from(texturesProp.value, 'base64').toString('utf8'));
+                    if (decoded.textures && decoded.textures.SKIN && decoded.textures.SKIN.metadata) {
+                        return decoded.textures.SKIN.metadata.model === 'slim' ? 'slim' : 'default';
+                    }
+                } catch (e) {}
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
 let versionCache = null;
 let versionCacheTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000;
@@ -2568,6 +2590,23 @@ function saveAccounts(accounts) {
 
 const VERSIONS_DATA_FILE = path.join(DATA_DIR, 'versions-data.json');
 const EXTERNAL_FOLDERS_FILE = path.join(DATA_DIR, 'external-folders.json');
+
+let _versionsDirWatcher = null;
+function watchVersionsDir() {
+    if (_versionsDirWatcher) return;
+    if (!fs.existsSync(VERSIONS_DIR)) return;
+    try {
+        _versionsDirWatcher = fs.watch(VERSIONS_DIR, { persistent: false }, (eventType) => {
+            _versionsCache = null;
+            _versionsCacheTime = 0;
+        });
+        _versionsDirWatcher.on('error', () => {
+            _versionsDirWatcher = null;
+            setTimeout(watchVersionsDir, 10000);
+        });
+    } catch (e) {}
+}
+setTimeout(watchVersionsDir, 2000);
 
 function loadVersions() {
     try {
@@ -4266,16 +4305,32 @@ function getRequiredJavaVersion(versionId, versionJson = null) {
         if (level >= 8) return 21;
     }
 
-    const baseVer = versionId.split('-')[0].split('_')[0];
-    const parts = baseVer.split('.').map(Number);
-    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-        const major = parts[0];
-        const minor = parts[1];
-        const patch = parts[2] || 0;
-        if (major >= 2 || (major === 1 && minor > 20) || (major === 1 && minor === 20 && patch >= 5)) return 21;
-        if (major === 1 && minor >= 17) return 16;
+    function parseMcVersion(verStr) {
+        const parts = verStr.split('.').map(Number);
+        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            const major = parts[0];
+            const minor = parts[1];
+            const patch = parts[2] || 0;
+            if (major >= 2 || (major === 1 && minor > 20) || (major === 1 && minor === 20 && patch >= 5)) return 21;
+            if (major === 1 && minor >= 17) return 16;
+        }
+        return 0;
     }
+
+    // 尝试从 versionId 的前半段解析 MC 版本（如 "1.21-forge-51.0.0"）
+    const baseVer = versionId.split('-')[0].split('_')[0];
+    let result = parseMcVersion(baseVer);
+    if (result > 0) return result;
+
+    // 尝试从 versionId 的所有分段中查找 MC 版本（如 "fabric-loader-0.16.10-1.21"）
+    const segments = versionId.split(/[-_]/);
+    for (const seg of segments) {
+        result = parseMcVersion(seg);
+        if (result > 0) return result;
+    }
+
     const loaderPart = versionId.split('-').slice(1).join('-').toLowerCase();
+    const parts = baseVer.split('.').map(Number);
     if (loaderPart.includes('forge') && parts.length >= 2 && parts[0] === 1 && parts[1] >= 16) return 11;
     return 8;
 }
@@ -5582,6 +5637,9 @@ function getInstalledVersions(forceRefresh) {
                 try {
                     const data = JSON.parse(fs.readFileSync(jsonFile, 'utf-8'));
                     const info = detectVersionInfo(data, dir);
+                    const hasModsDir = fs.existsSync(path.join(versionDir, 'mods'));
+                    const hasSavesDir = fs.existsSync(path.join(versionDir, 'saves'));
+                    const hasResourcepacksDir = fs.existsSync(path.join(versionDir, 'resourcepacks'));
                     installed.push({
                         id: data.id || dir,
                         type: data.type || 'release',
@@ -5597,7 +5655,11 @@ function getInstalledVersions(forceRefresh) {
                         isModpack: info.isModpack,
                         modpackLoader: info.modpackLoader,
                         baseVersion: info.baseVersion,
-                        isExternal: false
+                        isExternal: false,
+                        isolation: true,
+                        hasMods: hasModsDir,
+                        hasSaves: hasSavesDir,
+                        hasResourcepacks: hasResourcepacksDir
                     });
                 } catch (e) {
                     installed.push({ id: dir, type: 'release', installed: true, isExternal: false });
@@ -6693,10 +6755,20 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
         try {
             const settings = loadSettingsCached();
             const javaExeWin = path.join(targetPath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+            let updatePath = false;
             if (!settings.javaPath || !fs.existsSync(settings.javaPath)) {
+                updatePath = true;
+            } else {
+                const currentMajor = getJavaMajorVersion(settings.javaPath);
+                if (majorVersion > currentMajor && currentMajor > 0) {
+                    updatePath = true;
+                    console.log(`[Java] 当前默认Java ${currentMajor} < 新安装的Java ${majorVersion}，更新默认路径`);
+                }
+            }
+            if (updatePath) {
                 settings.javaPath = javaExeWin;
                 saveSettings(settings);
-                console.log(`[Java] 已自动配置javaPath: ${javaExeWin}`);
+                console.log(`[Java] 已自动配置javaPath: ${javaExeWin} (版本: ${majorVersion})`);
             }
         } catch (setErr) {
             console.warn('[Java] 自动配置javaPath失败:', setErr.message);
@@ -15867,7 +15939,26 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     let versionsData = loadVersions();
                     versionsData = versionsData.filter(v => !toDelete.includes(v.id));
                     saveVersions(versionsData);
+
+                    for (const id of toDelete) {
+                        const verDir = path.join(VERSIONS_DIR, id);
+                        if (!fs.existsSync(verDir)) continue;
+                        const verModsDir = path.join(verDir, 'mods');
+                        if (fs.existsSync(verModsDir)) {
+                            try {
+                                const modFiles = fs.readdirSync(verModsDir).filter(f => f.endsWith('.jar') || f.endsWith('.zip') || f.endsWith('.disabled'));
+                                if (modFiles.length > 0) {
+                                    console.log(`[Delete] 清理版本 ${id} 的 ${modFiles.length} 个模组文件`);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+
                     cleanupVersionChain(dvId);
+
+                    _versionsCache = null;
+                    _versionsCacheTime = 0;
+
                     sendJSON({ success: true, deleted: toDelete });
                 } catch (e) { sendJSON({ success: false, error: e.message }); }
                 break;
@@ -18094,6 +18185,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 if (!resolvedVersionDir.startsWith(path.resolve(VERSIONS_DIR))) { sendError('Invalid versionId path', 400); break; }
                 if (fs.existsSync(versionDir)) {
                     fs.rmSync(versionDir, { recursive: true, force: true });
+                    _versionsCache = null;
+                    _versionsCacheTime = 0;
                     sendJSON({ success: true, message: `Version ${versionId} deleted` });
                 } else {
                     sendError('Version not found', 404);
@@ -20448,8 +20541,12 @@ async function handleAPI(pathname, req, res, parsedUrl) {
 
                     console.log(`[ThirdParty] 登录成功: ${profile.name} (${profile.id})`);
                     const extractedSkinUrl = extractSkinUrlFromAuthResult(refreshResult || authResult) || extractSkinUrlFromAuthResult(authResult);
+                    const extractedSkinModel = extractSkinModelFromAuthResult(refreshResult || authResult) || extractSkinModelFromAuthResult(authResult);
                     if (extractedSkinUrl) {
                         console.log(`[ThirdParty] 从登录响应提取到皮肤URL: ${extractedSkinUrl.substring(0, 60)}...`);
+                    }
+                    if (extractedSkinModel) {
+                        console.log(`[ThirdParty] 从登录响应提取到皮肤模型: ${extractedSkinModel}`);
                     }
                     const aiDir2 = path.join(DATA_DIR, 'authlib-injector');
                     const aiFiles = fs.existsSync(aiDir2) ? fs.readdirSync(aiDir2).filter(f => f.endsWith('.jar')) : [];
@@ -20475,6 +20572,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         clientToken: authResult.clientToken,
                         serverUrl: tlServerUrl,
                         skinUrl: extractedSkinUrl || null,
+                        skinModel: extractedSkinModel || 'default',
                         createdAt: new Date().toISOString()
                     };
 
@@ -20550,6 +20648,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     const spProfile = refreshResult.selectedProfile || { id: spProfileId, name: spProfileName || 'Player' };
                     const spNewAccessToken = refreshResult.accessToken || spAccessToken;
                     const spExtractedSkinUrl = extractSkinUrlFromAuthResult(refreshResult);
+                    const spExtractedSkinModel = extractSkinModelFromAuthResult(refreshResult);
                     if (spExtractedSkinUrl) {
                         console.log(`[ThirdParty] 从角色选择响应提取到皮肤URL: ${spExtractedSkinUrl.substring(0, 60)}...`);
                     }
@@ -20575,6 +20674,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         clientToken: spClientToken,
                         serverUrl: spServerUrl,
                         skinUrl: spExtractedSkinUrl || null,
+                        skinModel: spExtractedSkinModel || 'default',
                         createdAt: new Date().toISOString()
                     };
 
