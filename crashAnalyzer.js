@@ -71,6 +71,7 @@ const CrashReason = {
     InvalidPath: '无效路径',
     ModCyclicIssue: 'Mod循环问题',
     SecurityException: '安全异常',
+    NativeLinkError: '本地库加载失败',
     Unknown: '未知错误'
 };
 
@@ -784,6 +785,11 @@ class CrashAnalyzer {
 
     analyzeCrit3() {
         if (this.logMc) {
+            if (this.logMc.includes('UnsatisfiedLinkError') || this.logHs?.includes('UnsatisfiedLinkError')) {
+                const linkLog = this.logMc.includes('UnsatisfiedLinkError') ? this.logMc : this.logHs;
+                const libMatch = this.regexSeek(linkLog, '(?<=no )[^ ]+(?= in )') || this.regexSeek(linkLog, '(?<=UnsatisfiedLinkError: )[^\\n]+');
+                this.appendReason(CrashReason.NativeLinkError, libMatch || '请检查游戏路径是否包含中文字符');
+            }
             if (!(this.logMc.includes('at net.') || this.logMc.includes('INFO]')) && this.logHs === null && this.logCrash === null && this.logMc.length < 100) {
                 this.appendReason(CrashReason.InvalidPath, this.logMc);
             }
@@ -1119,6 +1125,13 @@ class CrashAnalyzer {
                     break;
                 case CrashReason.SecurityException:
                     results.push('发现安全异常，请检查 Java 安全设置。\n可能是 Java 安全策略限制了某些操作。');
+                    break;
+                case CrashReason.NativeLinkError:
+                    if (additional && additional.length > 0 && additional[0] !== '请检查游戏路径是否包含中文字符') {
+                        results.push(`无法加载本地库 ${additional[0]}。\n请检查游戏路径是否包含中文字符，或尝试重新安装整合包。\n如果是 Forge 整合包，可以在启动器中重新安装 Forge。`);
+                    } else {
+                        results.push('无法加载本地库（LWJGL Native），游戏路径可能包含中文字符。\n请将游戏移动到纯英文路径下，或在设置中修复游戏目录。');
+                    }
                     break;
                 case CrashReason.IntelDriverCrash:
                 case CrashReason.AMDDriverCrash:

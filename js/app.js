@@ -82,10 +82,29 @@ const dlManager = {
     update(id, data) {
         const task = this.tasks.get(id);
         if (!task) return;
+        const targetProgress = Math.min(data.progress || 0, 100);
+        let smoothProgress;
+        if (data.status === 'completed' || data.status === 'failed') {
+            smoothProgress = data.status === 'completed' ? 100 : Math.min(targetProgress, 100);
+        } else if (task.type === 'modpack' && task._smoothProgress !== undefined) {
+            const cur = task._smoothProgress || 0;
+            if (targetProgress <= cur || targetProgress <= 0) {
+                smoothProgress = targetProgress;
+            } else {
+                const smoothed = cur * 0.7 + targetProgress * 0.3;
+                smoothProgress = Math.max(cur, Math.min(Math.round(smoothed), 100));
+            }
+        } else {
+            smoothProgress = targetProgress;
+        }
         Object.assign(task, data);
         task.progress = Math.min(task.progress || 0, 100);
         if (data.status === 'completed' || data.status === 'failed') {
             task.progress = data.status === 'completed' ? 100 : Math.min(task.progress, 100);
+            task._smoothProgress = task.progress;
+        } else if (task.type === 'modpack') {
+            task.progress = smoothProgress;
+            task._smoothProgress = smoothProgress;
         }
         this.updateFab();
         this.updateDom(id);
@@ -1320,6 +1339,13 @@ async function init() {
                 if (typeof setPanoramaRotationSpeed === 'function') setPanoramaRotationSpeed(savedPanoramaSpeed * 0.001);
             }
 
+            const savedMouseFollow = await window.electronAPI?.store?.get('versepc_panorama_mouse_follow');
+            if (savedMouseFollow === true) {
+                const toggle = document.getElementById('panoramaMouseFollowToggle');
+                if (toggle) toggle.checked = true;
+                if (typeof setPanoramaMouseFollow === 'function') setPanoramaMouseFollow(true);
+            }
+
             const savedCustomImage = await window.electronAPI.store.get('versepc_custom_image');
             if (savedCustomImage) {
                 const nameEl = document.getElementById('custom-wallpaper-file-name');
@@ -1371,12 +1397,7 @@ function setupNavigation() {
             const page = btn.dataset.page;
             if (!page) return;
 
-            if (page === 'versions' && versionsLoadFailed) {
-                console.log('[Navigate] Versions page entered, retrying load...');
-                const container = document.getElementById('versions-list');
-                if (container) {
-                    container.innerHTML = `<div class="loading-spinner"><div class="spinner"></div><p>正在重新加载...</p></div>`;
-                }
+            if (page === 'versions') {
                 loadVersions(true);
             }
 
@@ -1613,7 +1634,7 @@ function setupAccountButtons() {
                 showToast(result.error || '登录失败', 'error');
             }
         } catch (e) {
-            showToast('登录失败', 'error');
+            showToast('登录失败: ' + (e.message || e.error || '未知错误'), 'error');
         } finally {
             btn.disabled = false;
             btn.textContent = '登录';
@@ -2733,7 +2754,7 @@ async function pollInstallProgress(sessionId) {
             if (data.status === 'completed') {
                 showToast(data.versionId + ' 安装完成！', 'success');
                 currentInstallSessionId = null;
-                await loadVersions();
+                await loadVersions(true);
                 return;
             }
             if (data.status === 'failed') {
@@ -2776,16 +2797,25 @@ async function deleteVersion(versionId) {
         try {
             await API.deleteVersion(versionId);
             showToast(`已移除 ${versionId}`, 'success');
-            await loadVersions();
+            await loadVersions(true);
         } catch (e) { showToast('移除失败', 'error'); }
         return;
     }
-    const confirmed = await showConfirmDialog('删除版本', `确定要删除版本 ${versionId} 吗？`, '删除', '取消');
+    const ver = installedVersions.find(v => v.id === versionId);
+    let warningParts = [];
+    if (ver?.hasMods) warningParts.push('模组');
+    if (ver?.hasSaves) warningParts.push('存档');
+    if (ver?.hasResourcepacks) warningParts.push('资源包');
+    let confirmMsg = `确定要删除版本 ${versionId} 吗？`;
+    if (warningParts.length > 0) {
+        confirmMsg += `\n\n⚠ 由于该版本开启了版本隔离，删除版本时该版本对应的${warningParts.join('、')}等文件也将被一并删除！`;
+    }
+    const confirmed = await showConfirmDialog('版本删除确认', confirmMsg, '删除', '取消');
     if (!confirmed) return;
     try {
         await API.deleteVersion(versionId);
         showToast(`版本 ${versionId} 已删除`, 'success');
-        await loadVersions();
+        await loadVersions(true);
     } catch (e) { showToast('删除失败', 'error'); }
 }
 
@@ -2847,7 +2877,7 @@ async function confirmAddExternalFolder() {
             }
             setTimeout(() => {
                 closeExternalFolderModal();
-                loadVersions();
+                loadVersions(true);
             }, 1500);
         } else {
             document.getElementById('external-folder-error').textContent = result.error || '添加失败';
@@ -2952,7 +2982,7 @@ async function installModLoader() {
         if (result.success) {
             showToast(`${loaderNames[currentLoaderType] || currentLoaderType} 安装成功！`, 'success');
             closeModLoaderModal();
-            await loadVersions();
+            await loadVersions(true);
         } else {
             showToast(result.error || '安装失败', 'error');
         }
@@ -3660,7 +3690,10 @@ async function batchDownloadFavorites() {
     showToast('正在准备下载 ' + ids.length + ' 个模组...', 'info');
     for (var i = 0; i < ids.length; i++) {
         try {
-            await API.downloadMod(ids[i], 'modrinth', '', '');
+            const result = await API.downloadMod(ids[i], 'modrinth', '', '');
+            if (result.success && result.sessionId) {
+                showModDownloadModal(result.fileName, result.sessionId, result.path || '');
+            }
         } catch (e) {
             console.error('下载失败:', ids[i], e);
         }
@@ -4694,7 +4727,7 @@ function showModpackInstallModal(fileName, sessionId) {
             });
             if (data.status === 'completed') {
                 showToast('整合包安装完成', 'success');
-                loadVersions();
+                loadVersions(true);
                 return;
             }
             if (data.status === 'failed') {
@@ -4706,7 +4739,7 @@ function showModpackInstallModal(fileName, sessionId) {
                 return;
             }
             if (data.phase === 'importing') {
-                const timer = setTimeout(poll, 500);
+                const timer = setTimeout(poll, 300);
                 modDownloadPollTimers.push(timer);
                 return;
             }
@@ -4720,14 +4753,14 @@ function showModpackInstallModal(fileName, sessionId) {
                 dlManager.update(taskId, { status: 'failed', message: '会话已失效' });
                 return;
             }
-            const timer = setTimeout(poll, 500);
+            const timer = setTimeout(poll, 300);
             modDownloadPollTimers.push(timer);
         } catch (e) {
-            const timer = setTimeout(poll, 1000);
+            const timer = setTimeout(poll, 800);
             modDownloadPollTimers.push(timer);
         }
     };
-    setTimeout(poll, 500);
+    setTimeout(poll, 300);
 }
 
 function getDownloadStageText(data) {
@@ -6829,10 +6862,12 @@ async function startMsAuth() {
                 }
             }, (result.interval || 5) * 1000);
         } else {
-            document.getElementById('msauth-status-text').textContent = '获取设备码失败';
+            const errMsg = result.error || '获取设备码失败';
+            document.getElementById('msauth-status-text').textContent = errMsg;
         }
     } catch (e) {
-        document.getElementById('msauth-status-text').textContent = '请求失败';
+        const msg = e?.message || e?.error || '请求失败';
+        document.getElementById('msauth-status-text').textContent = msg.includes('网络') || msg.includes('超时') ? '网络连接失败，请检查网络后重试' : msg;
     }
 }
 
@@ -8851,17 +8886,22 @@ async function showVersionSelectDialog() {
         const cancelBtn = modal.querySelector('#version-select-cancel');
         const confirmBtn = modal.querySelector('#version-select-confirm');
         
-        // 加载版本列表
-        API.getVersions().then(versions => {
+        API.getVersions(true).then(data => {
             select.innerHTML = '';
-            const installed = (versions || []).filter(v => v.id && v.type !== '(old)');
+            const installed = (data?.installed || []).filter(v => v.id && v.type !== '(old)');
             if (installed.length === 0) {
                 select.innerHTML = '<option value="">没有已安装的版本</option>';
             } else {
                 installed.forEach(v => {
                     const opt = document.createElement('option');
                     opt.value = v.id;
-                    opt.textContent = v.name || v.id;
+                    let label = v.id;
+                    if (v.isModpack) label += ` [${v.modpackLoader || '整合包'}]`;
+                    else if (v.isFabric) label += ' [Fabric]';
+                    else if (v.isForge) label += ' [Forge]';
+                    else if (v.isNeoForge) label += ' [NeoForge]';
+                    else if (v.isOptiFine) label += ' [OptiFine]';
+                    opt.textContent = label;
                     select.appendChild(opt);
                 });
             }
@@ -9340,16 +9380,28 @@ async function deleteCurrentVersion() {
         return;
     }
     const isExternal = currentSettingsVersionId.includes('[外部]');
-    const msg = isExternal ? '确定要从列表中移除此外部版本吗？（不会删除实际游戏文件）' : '确定要删除此版本吗？此操作不可撤销！';
-    const btnText = isExternal ? '移除' : '删除';
-    const confirmed = await showConfirmDialog(isExternal ? '移除外部版本' : '删除版本', msg, btnText, '取消');
-    if (!confirmed) return;
+    if (isExternal) {
+        const confirmed = await showConfirmDialog('移除外部版本', '确定要从列表中移除此外部版本吗？（不会删除实际游戏文件）', '移除', '取消');
+        if (!confirmed) return;
+    } else {
+        const ver = installedVersions.find(v => v.id === currentSettingsVersionId);
+        let warningParts = [];
+        if (ver?.hasMods) warningParts.push('模组');
+        if (ver?.hasSaves) warningParts.push('存档');
+        if (ver?.hasResourcepacks) warningParts.push('资源包');
+        let confirmMsg = `确定要删除版本 ${currentSettingsVersionId} 吗？此操作不可撤销！`;
+        if (warningParts.length > 0) {
+            confirmMsg += `\n\n⚠ 由于该版本开启了版本隔离，删除版本时该版本对应的${warningParts.join('、')}等文件也将被一并删除！`;
+        }
+        const confirmed = await showConfirmDialog('版本删除确认', confirmMsg, '删除', '取消');
+        if (!confirmed) return;
+    }
     try {
         const r = await API.deleteVersion(currentSettingsVersionId);
         if (r.success) {
             showToast('版本已删除', 'success');
             closeVersionSettings();
-            loadVersions();
+            loadVersions(true);
         } else {
             showToast(r.error || '删除失败', 'error');
         }
@@ -10080,6 +10132,8 @@ async function selectWallpaper(element) {
     document.getElementById('panorama-theme-group').style.display = isPanorama ? '' : 'none';
     const speedRow = document.getElementById('panoramaSpeedRow');
     if (speedRow) speedRow.style.display = isPanorama ? '' : 'none';
+    const mouseFollowRow = document.getElementById('panoramaMouseFollowRow');
+    if (mouseFollowRow) mouseFollowRow.style.display = isPanorama ? '' : 'none';
 
     if (isCustom) {
         const fileLabel = document.getElementById('custom-wallpaper-file-label');
@@ -10271,6 +10325,11 @@ function onPanoramaSpeedChange(value) {
     window.electronAPI?.store?.set('versepc_panorama_speed', parseInt(value));
     const label = document.getElementById('panoramaSpeedLabel');
     if (label) label.textContent = value;
+}
+
+function onPanoramaMouseFollowChange(enabled) {
+    if (typeof setPanoramaMouseFollow === 'function') setPanoramaMouseFollow(enabled);
+    window.electronAPI?.store?.set('versepc_panorama_mouse_follow', enabled);
 }
 
 function aiToggleApiKeyVisibility() {

@@ -89,11 +89,19 @@
 
         if (window.electronAPI && window.electronAPI.onImportProgress) {
             if (window.electronAPI.removeImportProgressListener) window.electronAPI.removeImportProgressListener();
+            let _localSmoothPct = 0;
             window.electronAPI.onImportProgress(function (data) {
                 if (typeof dlManager !== 'undefined') {
                     const stageText = getImportStageText(data.message);
+                    const rawPct = data.progress || 0;
+                    if (_localSmoothPct <= 0 || rawPct <= _localSmoothPct) {
+                        _localSmoothPct = rawPct;
+                    } else {
+                        _localSmoothPct = _localSmoothPct * 0.7 + rawPct * 0.3;
+                    }
+                    const smoothPct = Math.max(rawPct, Math.round(_localSmoothPct));
                     const updateData = {
-                        progress: data.progress || 0,
+                        progress: smoothPct,
                         status: 'downloading',
                         message: stageText
                     };
@@ -141,7 +149,7 @@
                 if (typeof showToast === 'function') {
                     showToast('整合包 "' + (result.name || file.name) + '" 导入成功！', 'success');
                 }
-                if (typeof loadVersions === 'function') loadVersions();
+                if (typeof loadVersions === 'function') loadVersions(true);
             } else {
                 window._modpackImporting = false;
                 if (typeof dlManager !== 'undefined') {

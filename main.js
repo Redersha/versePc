@@ -2415,32 +2415,69 @@ function registerAIChatIPC() {
 
     ipcMain.handle('ai:get-versions', async () => {
         const fs = require('fs');
-        const path = require('path');
+        const pathMod = require('path');
         const os = require('os');
-        const versionsDir = path.join(os.homedir(), '.versepc', 'versions');
+        const versionsDir = pathMod.join(os.homedir(), '.versepc', 'versions');
         if (!fs.existsSync(versionsDir)) return [];
+
+        function detectLoaderFromJson(data, dirName) {
+            const jsonStr = JSON.stringify(data).toLowerCase();
+            const idLower = (data.id || dirName).toLowerCase();
+            const mcLower = (data.mainClass || '').toLowerCase();
+            if (/fabric/i.test(idLower) || /fabric/i.test(mcLower) || jsonStr.includes('net.fabricmc:fabric-loader') || jsonStr.includes('org.quiltmc:quilt-loader')) return 'Fabric';
+            if (jsonStr.includes('net.neoforge') || jsonStr.includes('neoforged') || /neoforge/i.test(idLower)) return 'NeoForge';
+            if (jsonStr.includes('net.minecraftforge') || /forge/i.test(idLower) || /forge/i.test(mcLower)) return 'Forge';
+            if (jsonStr.includes('optifine:optifine') || /optifine/i.test(idLower)) return 'OptiFine';
+            if (jsonStr.includes('liteloader') || /liteloader/i.test(idLower)) return 'LiteLoader';
+            return null;
+        }
+
+        function resolveLoaderFromInheritsChain(data, dirName, depth) {
+            if (depth > 5) return null;
+            const loader = detectLoaderFromJson(data, dirName);
+            if (loader) return loader;
+            if (data.inheritsFrom) {
+                const inheritLower = data.inheritsFrom.toLowerCase();
+                if (/fabric/i.test(inheritLower)) return 'Fabric';
+                if (/forge/i.test(inheritLower)) return 'Forge';
+                if (/neoforge/i.test(inheritLower)) return 'NeoForge';
+                if (/quilt/i.test(inheritLower)) return 'Quilt';
+                if (/optifine/i.test(inheritLower)) return 'OptiFine';
+                const parentPath = pathMod.join(versionsDir, data.inheritsFrom, data.inheritsFrom + '.json');
+                if (fs.existsSync(parentPath)) {
+                    try {
+                        const parentData = JSON.parse(fs.readFileSync(parentPath, 'utf8'));
+                        return resolveLoaderFromInheritsChain(parentData, data.inheritsFrom, depth + 1);
+                    } catch (_) {}
+                }
+            }
+            return null;
+        }
+
         try {
             const dirs = await fs.promises.readdir(versionsDir, { withFileTypes: true });
             const results = [];
             for (const d of dirs) {
                 if (!d.isDirectory()) continue;
-                const versionDir = path.join(versionsDir, d.name);
+                const versionDir = pathMod.join(versionsDir, d.name);
                 const info = { id: d.name, name: d.name, path: versionDir };
                 try {
-                    const versionJsonPath = path.join(versionDir, d.name + '.json');
+                    const versionJsonPath = pathMod.join(versionDir, d.name + '.json');
                     if (fs.existsSync(versionJsonPath)) {
                         const data = JSON.parse(await fs.promises.readFile(versionJsonPath, 'utf8'));
                         info.type = data.type || 'release';
                         info.baseVersion = d.name.replace(/-?(fabric|forge|neoforge|optifine|liteloader|quilt)[\s\S]*/i, '').trim();
-                        info.isFabric = /fabric/i.test(d.name);
-                        info.isForge = /forge/i.test(d.name);
-                        info.isNeoForge = /neoforge/i.test(d.name);
-                        info.isOptiFine = /optifine/i.test(d.name);
-                        info.isQuilt = /quilt/i.test(d.name);
-                        info.loader = info.isFabric ? 'Fabric' : info.isForge ? 'Forge' : info.isNeoForge ? 'NeoForge' : info.isOptiFine ? 'OptiFine' : info.isQuilt ? 'Quilt' : 'Vanilla';
                         if (data.inheritsFrom) info.inheritsFrom = data.inheritsFrom;
                         if (data.javaVersion) info.javaVersion = data.javaVersion.majorVersion || '';
-                        const modsDir = path.join(versionDir, 'mods');
+                        let detectedLoader = detectLoaderFromJson(data, d.name);
+                        if (!detectedLoader) detectedLoader = resolveLoaderFromInheritsChain(data, d.name, 0);
+                        info.loader = detectedLoader || 'Vanilla';
+                        info.isFabric = info.loader === 'Fabric';
+                        info.isForge = info.loader === 'Forge';
+                        info.isNeoForge = info.loader === 'NeoForge';
+                        info.isOptiFine = info.loader === 'OptiFine';
+                        info.isQuilt = info.loader === 'Quilt';
+                        const modsDir = pathMod.join(versionDir, 'mods');
                         if (fs.existsSync(modsDir)) {
                             const modFiles = await fs.promises.readdir(modsDir);
                             info.modsCount = modFiles.filter(f => f.endsWith('.jar')).length;
@@ -4082,45 +4119,8 @@ function registerAIChatIPC() {
                     return JSON.stringify(body);
                 }
                 case 'get_versions': {
-                    if (args.installedOnly) {
-                        const fs = require('fs');
-                        const pathMod = require('path');
-                        const os = require('os');
-                        const versionsDir = pathMod.join(os.homedir(), '.versepc', 'versions');
-                        if (!fs.existsSync(versionsDir)) return JSON.stringify({ installed: [] });
-                        try {
-                            const dirs = await fs.promises.readdir(versionsDir, { withFileTypes: true });
-                            const results = [];
-                            for (const d of dirs) {
-                                if (!d.isDirectory()) continue;
-                                const vDir = pathMod.join(versionsDir, d.name);
-                                const info = { id: d.name, name: d.name, path: vDir };
-                                try {
-                                    const vJson = pathMod.join(vDir, d.name + '.json');
-                                    if (fs.existsSync(vJson)) {
-                                        const data = JSON.parse(await fs.promises.readFile(vJson, 'utf8'));
-                                        info.type = data.type || 'release';
-                                        info.baseVersion = d.name.replace(/-?(fabric|forge|neoforge|optifine|liteloader|quilt)[\s\S]*/i, '').trim();
-                                        info.loader = /fabric/i.test(d.name) ? 'Fabric' : /forge/i.test(d.name) ? 'Forge' : /neoforge/i.test(d.name) ? 'NeoForge' : /optifine/i.test(d.name) ? 'OptiFine' : /quilt/i.test(d.name) ? 'Quilt' : 'Vanilla';
-                                        info.isForge = info.loader === 'Forge';
-                                        info.isFabric = info.loader === 'Fabric';
-                                        info.isNeoForge = info.loader === 'NeoForge';
-                                        if (data.inheritsFrom) info.inheritsFrom = data.inheritsFrom;
-                                        if (data.javaVersion) info.javaVersion = data.javaVersion.majorVersion || '';
-                                        const modsDir = pathMod.join(vDir, 'mods');
-                                        if (fs.existsSync(modsDir)) {
-                                            const modFiles = await fs.promises.readdir(modsDir);
-                                            info.modsCount = modFiles.filter(f => f.endsWith('.jar')).length;
-                                        }
-                                        info.modsPath = pathMod.join(vDir, 'mods');
-                                    }
-                                } catch (e) {}
-                                results.push(info);
-                            }
-                            return JSON.stringify({ installed: results });
-                        } catch (e) { return JSON.stringify({ installed: [] }); }
-                    }
                     const query = {};
+                    if (args.installedOnly) query.installed = 'true';
                     const result = await callAPI('/api/versions', 'GET', null, query);
                     const body = JSON.parse(result.body.toString());
                     return JSON.stringify(body);
@@ -4280,6 +4280,41 @@ function registerAIChatIPC() {
                     const os = require('os');
                     const versionsDir = pathMod.join(os.homedir(), '.versepc', 'versions');
                     let installed = [];
+
+                    function svDetectLoader(data, dirName) {
+                        const jsonStr = JSON.stringify(data).toLowerCase();
+                        const idLower = (data.id || dirName).toLowerCase();
+                        const mcLower = (data.mainClass || '').toLowerCase();
+                        if (/fabric/i.test(idLower) || /fabric/i.test(mcLower) || jsonStr.includes('net.fabricmc:fabric-loader') || jsonStr.includes('org.quiltmc:quilt-loader')) return 'Fabric';
+                        if (jsonStr.includes('net.neoforge') || jsonStr.includes('neoforged') || /neoforge/i.test(idLower)) return 'NeoForge';
+                        if (jsonStr.includes('net.minecraftforge') || /forge/i.test(idLower) || /forge/i.test(mcLower)) return 'Forge';
+                        if (jsonStr.includes('optifine:optifine') || /optifine/i.test(idLower)) return 'OptiFine';
+                        if (jsonStr.includes('liteloader') || /liteloader/i.test(idLower)) return 'LiteLoader';
+                        return null;
+                    }
+
+                    function svResolveLoader(data, dirName, depth) {
+                        if (depth > 5) return null;
+                        const loader = svDetectLoader(data, dirName);
+                        if (loader) return loader;
+                        if (data.inheritsFrom) {
+                            const inheritLower = data.inheritsFrom.toLowerCase();
+                            if (/fabric/i.test(inheritLower)) return 'Fabric';
+                            if (/forge/i.test(inheritLower)) return 'Forge';
+                            if (/neoforge/i.test(inheritLower)) return 'NeoForge';
+                            if (/quilt/i.test(inheritLower)) return 'Quilt';
+                            if (/optifine/i.test(inheritLower)) return 'OptiFine';
+                            const parentPath = pathMod.join(versionsDir, data.inheritsFrom, data.inheritsFrom + '.json');
+                            if (fs.existsSync(parentPath)) {
+                                try {
+                                    const parentData = JSON.parse(fs.readFileSync(parentPath, 'utf8'));
+                                    return svResolveLoader(parentData, data.inheritsFrom, depth + 1);
+                                } catch (_) {}
+                            }
+                        }
+                        return null;
+                    }
+
                     if (fs.existsSync(versionsDir)) {
                         try {
                             const dirs = await fs.promises.readdir(versionsDir, { withFileTypes: true });
@@ -4292,10 +4327,13 @@ function registerAIChatIPC() {
                                     if (fs.existsSync(vJson)) {
                                         const data = JSON.parse(await fs.promises.readFile(vJson, 'utf8'));
                                         info.type = data.type || 'release';
-                                        info.loader = /fabric/i.test(d.name) ? 'Fabric' : /forge/i.test(d.name) ? 'Forge' : /neoforge/i.test(d.name) ? 'NeoForge' : /optifine/i.test(d.name) ? 'OptiFine' : /quilt/i.test(d.name) ? 'Quilt' : 'Vanilla';
+                                        let detectedLoader = svDetectLoader(data, d.name);
+                                        if (!detectedLoader) detectedLoader = svResolveLoader(data, d.name, 0);
+                                        info.loader = detectedLoader || 'Vanilla';
                                         info.isForge = info.loader === 'Forge';
                                         info.isFabric = info.loader === 'Fabric';
                                         info.isNeoForge = info.loader === 'NeoForge';
+                                        if (data.inheritsFrom) info.inheritsFrom = data.inheritsFrom;
                                         const modsDir = pathMod.join(vDir, 'mods');
                                         if (fs.existsSync(modsDir)) {
                                             const modFiles = await fs.promises.readdir(modsDir);

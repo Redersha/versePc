@@ -287,10 +287,10 @@ const BMCLAPI_MIRROR = {
     'https://maven.minecraftforge.net/': 'https://bmclapi2.bangbang93.com/maven/',
     'https://maven.neoforged.net/': 'https://bmclapi2.bangbang93.com/maven/',
     'https://maven.fabricmc.net/': 'https://bmclapi2.bangbang93.com/maven/',
-    'https://cdn.modrinth.com/': 'https://mod.mcimirror.top/modrinth/',
-    'https://edge.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
-    'https://mediafilez.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
-    'https://media.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
+    'https://cdn.modrinth.com/': 'https://mod.mcimirror.top/',
+    'https://edge.forgecdn.net/': 'https://mod.mcimirror.top/',
+    'https://mediafilez.forgecdn.net/': 'https://mod.mcimirror.top/',
+    'https://media.forgecdn.net/': 'https://mod.mcimirror.top/',
 };
 
 const MCIM_MIRROR = {
@@ -300,10 +300,10 @@ const MCIM_MIRROR = {
     'https://resources.download.minecraft.net/': 'https://download.mcbbs.net/assets/',
     'https://launchermeta.mojang.com/': 'https://download.mcbbs.net/',
     'https://launcher.mojang.com/': 'https://download.mcbbs.net/',
-    'https://cdn.modrinth.com/': 'https://mod.mcimirror.top/modrinth/',
-    'https://edge.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
-    'https://mediafilez.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
-    'https://media.forgecdn.net/': 'https://mod.mcimirror.top/curseforge/',
+    'https://cdn.modrinth.com/': 'https://mod.mcimirror.top/',
+    'https://edge.forgecdn.net/': 'https://mod.mcimirror.top/',
+    'https://mediafilez.forgecdn.net/': 'https://mod.mcimirror.top/',
+    'https://media.forgecdn.net/': 'https://mod.mcimirror.top/',
 };
 
 const JAVA_DOWNLOAD_MIRRORS = [
@@ -3294,7 +3294,9 @@ function detectVersionInfo(data, dirName) {
     const isContentVanilla = hasNoLoaderFlags && !isBootStrap && !hasForgeGameArg && !hasNeoForgeGameArg &&
         (mainClassLower.includes('net.minecraft.client.main') || mainClassLower === '') &&
         !librariesStr.includes('net.minecraftforge') && !librariesStr.includes('net.fabricmc') && !librariesStr.includes('net.neoforge');
-    const isModpack = !bareMcPattern.test(versionId) && !loaderIdPattern.test(versionId) && !isContentVanilla;
+    const hasInheritsFrom = !!data.inheritsFrom;
+    const inheritsFromNonMc = hasInheritsFrom && !bareMcPattern.test(data.inheritsFrom);
+    const isModpack = !bareMcPattern.test(versionId) && !loaderIdPattern.test(versionId) && (!isContentVanilla || inheritsFromNonMc);
 
     if (isModpack) {
         let loaderType = '';
@@ -3302,6 +3304,7 @@ function detectVersionInfo(data, dirName) {
         else if (isFabric) loaderType = 'Fabric';
         else if (isNeoForge) loaderType = 'NeoForge';
         let resolvedIsForge = isForge, resolvedIsFabric = isFabric, resolvedIsNeoForge = isNeoForge;
+        let resolvedIsOptiFine = isOptiFine, resolvedIsLiteLoader = isLiteLoader;
         if (!loaderType && data.inheritsFrom) {
             const parentJsonPath = path.join(VERSIONS_DIR, data.inheritsFrom, `${data.inheritsFrom}.json`);
             if (fs.existsSync(parentJsonPath)) {
@@ -3349,7 +3352,7 @@ function detectVersionInfo(data, dirName) {
                 if (idMatch) baseVersion = idMatch[1];
             }
         }
-        return { isFabric: resolvedIsFabric, isForge: resolvedIsForge, isNeoForge: resolvedIsNeoForge, isOptiFine, isLiteLoader, isModpack, modpackLoader: loaderType, baseVersion };
+        return { isFabric: resolvedIsFabric, isForge: resolvedIsForge, isNeoForge: resolvedIsNeoForge, isOptiFine: resolvedIsOptiFine, isLiteLoader: resolvedIsLiteLoader, isModpack, modpackLoader: loaderType, baseVersion };
     }
 
     if (data.inheritsFrom && !isFabric && !isForge && !isNeoForge && !isOptiFine && !isLiteLoader) {
@@ -3574,7 +3577,7 @@ async function fetchJSON(urlStr, retriesOrHeaders = 3, timeoutMs) {
     if (typeof retriesOrHeaders === 'object' && retriesOrHeaders !== null) {
         extraHeaders = retriesOrHeaders;
     }
-    const reqTimeout = typeof timeoutMs === 'number' ? timeoutMs : 15000;
+    const reqTimeout = typeof timeoutMs === 'number' ? timeoutMs : 20000;
 
     let mirrorUrl = null;
     if (urlStr.startsWith(MODRINTH_API)) {
@@ -3586,10 +3589,10 @@ async function fetchJSON(urlStr, retriesOrHeaders = 3, timeoutMs) {
     const headers = { 'User-Agent': 'VersePC/2.0 (PCL2)', 'Connection': 'keep-alive', ...extraHeaders };
     const useMirror = mirrorUrl && _isMirrorAvailable();
     const steps = useMirror
-        ? [{ url: mirrorUrl, t: 3000, isMirror: true }, { url: urlStr, t: 5000 }, { url: mirrorUrl, t: 8000, isMirror: true }, { url: urlStr, t: Math.min(reqTimeout, 15000) }]
+        ? [{ url: mirrorUrl, t: 5000, isMirror: true }, { url: urlStr, t: 8000 }, { url: mirrorUrl, t: 12000, isMirror: true }, { url: urlStr, t: reqTimeout }]
         : mirrorUrl
-            ? [{ url: urlStr, t: Math.min(reqTimeout, 8000) }, { url: urlStr, t: reqTimeout }]
-            : [{ url: urlStr, t: Math.min(reqTimeout, 10000) }, { url: urlStr, t: reqTimeout }];
+            ? [{ url: urlStr, t: Math.min(reqTimeout, 10000) }, { url: urlStr, t: reqTimeout }]
+            : [{ url: urlStr, t: Math.min(reqTimeout, 12000) }, { url: urlStr, t: reqTimeout }];
 
     let lastErr = null;
     for (const step of steps) {
@@ -5616,6 +5619,33 @@ let _versionsCache = null;
 let _versionsCacheTime = 0;
 const VERSIONS_CACHE_TTL = 5000;
 
+function fixModpackInheritsFrom(installed, loaderIdPattern) {
+    const bareMcVersionPattern = /^\d+\.\d+(\.\d+)?$/;
+    for (const v of installed) {
+        if (!v.inheritsFrom || v.isExternal) continue;
+        if (loaderIdPattern.test(v.id)) continue;
+        if (!bareMcVersionPattern.test(v.inheritsFrom)) continue;
+        const baseMcId = v.inheritsFrom;
+        const parentLoader = installed.find(l =>
+            l.inheritsFrom === baseMcId &&
+            !l.isExternal &&
+            l.id !== v.id &&
+            (l.isForge || l.isFabric || l.isNeoForge || l.isOptiFine || l.isLiteLoader)
+        );
+        if (!parentLoader) continue;
+        const modpackJsonPath = path.join(VERSIONS_DIR, v.id, `${v.id}.json`);
+        if (!fs.existsSync(modpackJsonPath)) continue;
+        try {
+            const modpackData = JSON.parse(fs.readFileSync(modpackJsonPath, 'utf-8'));
+            if (modpackData.inheritsFrom === baseMcId) {
+                modpackData.inheritsFrom = parentLoader.id;
+                fs.writeFileSync(modpackJsonPath, JSON.stringify(modpackData, null, 2));
+                v.inheritsFrom = parentLoader.id;
+            }
+        } catch (e) {}
+    }
+}
+
 function getInstalledVersions(forceRefresh) {
     const now = Date.now();
     if (!forceRefresh && _versionsCache && (now - _versionsCacheTime) < VERSIONS_CACHE_TTL) {
@@ -5682,50 +5712,10 @@ function getInstalledVersions(forceRefresh) {
         }
     }
 
-    const bareMcVersionPattern = /^\d+\.\d+(\.\d+)?$/;
     const loaderIdPattern = /^(?:fabric-loader-\d|quilt-loader-\d|\d+\.\d+(?:\.\d+)?-(?:forge|neoforge)-\d)/;
 
-    console.log(`[getInstalledVersions] Scanned ${installed.length} raw versions:`);
-    for (const v of installed) {
-        console.log(`  - ${v.id}  inheritsFrom=${v.inheritsFrom || 'none'}  isForge=${v.isForge}  isFabric=${v.isFabric}  isNeoForge=${v.isNeoForge}  isExternal=${v.isExternal}  loaderPattern=${loaderIdPattern.test(v.id)}`);
-    }
+    fixModpackInheritsFrom(installed, loaderIdPattern);
 
-    for (const v of installed) {
-        if (!v.inheritsFrom || v.isExternal) continue;
-        if (loaderIdPattern.test(v.id)) continue;
-        if (!bareMcVersionPattern.test(v.inheritsFrom)) continue;
-        const baseMcId = v.inheritsFrom;
-        const parentLoader = installed.find(l =>
-            l.inheritsFrom === baseMcId &&
-            !l.isExternal &&
-            l.id !== v.id &&
-            (l.isForge || l.isFabric || l.isNeoForge || l.isOptiFine || l.isLiteLoader)
-        );
-        if (parentLoader) {
-            const modpackJsonPath = path.join(VERSIONS_DIR, v.id, `${v.id}.json`);
-            if (fs.existsSync(modpackJsonPath)) {
-                try {
-                    const modpackData = JSON.parse(fs.readFileSync(modpackJsonPath, 'utf-8'));
-                    if (modpackData.inheritsFrom === baseMcId) {
-                        modpackData.inheritsFrom = parentLoader.id;
-                        fs.writeFileSync(modpackJsonPath, JSON.stringify(modpackData, null, 2));
-                        v.inheritsFrom = parentLoader.id;
-                        console.log(`[AutoRepair] Fixed ${v.id} inheritsFrom: ${baseMcId} -> ${parentLoader.id}`);
-                    } else {
-                        console.log(`[AutoRepair] Skip ${v.id}: JSON already has inheritsFrom=${modpackData.inheritsFrom}`);
-                    }
-                } catch (e) {
-                    console.error(`[AutoRepair] Failed to fix ${v.id}: ${e.message}`);
-                }
-            } else {
-                console.log(`[AutoRepair] Skip ${v.id}: JSON not found at ${modpackJsonPath}`);
-            }
-        } else {
-            console.log(`[AutoRepair] No parent loader found for ${v.id} (inheritsFrom=${baseMcId})`);
-        }
-    }
-
-    const inheritsFromIds = new Set();
     const installedMap = new Map();
     for (const v of installed) {
         installedMap.set(v.id, v);
@@ -5733,15 +5723,17 @@ function getInstalledVersions(forceRefresh) {
             installedMap.set(v.id.replace(' [外部]', ''), v);
         }
     }
+
+    const inheritsFromIds = new Set();
     for (const v of installed) {
         if (!v.inheritsFrom) continue;
-        inheritsFromIds.add(v.inheritsFrom);
         let parentId = v.inheritsFrom;
         while (parentId) {
+            if (inheritsFromIds.has(parentId)) break;
+            inheritsFromIds.add(parentId);
             const parent = installedMap.get(parentId);
             if (!parent || !parent.inheritsFrom) break;
             parentId = parent.inheritsFrom;
-            inheritsFromIds.add(parentId);
         }
     }
 
@@ -5756,31 +5748,7 @@ function getInstalledVersions(forceRefresh) {
         if (externalId) inheritsFromIds.add(externalId);
     }
 
-    console.log(`[getInstalledVersions] inheritsFromIds (to hide): [${[...inheritsFromIds].join(', ')}]`);
-
-    const result = installed.filter(v => {
-        const shouldHide = inheritsFromIds.has(v.id);
-        console.log(`[getInstalledVersions] Filter: ${v.id}  isExternal=${v.isExternal}  inSet=${inheritsFromIds.has(v.id)}  -> ${shouldHide ? 'HIDDEN' : 'SHOWN'}`);
-        return !shouldHide;
-    });
-
-    console.log(`[getInstalledVersions] Final shown count: ${result.length}`);
-
-    try {
-        const debugInfo = {
-            time: new Date().toISOString(),
-            rawVersions: installed.map(v => ({
-                id: v.id, inheritsFrom: v.inheritsFrom, isForge: v.isForge,
-                isFabric: v.isFabric, isNeoForge: v.isNeoForge,
-                isExternal: v.isExternal, isModpack: v.isModpack,
-                modpackLoader: v.modpackLoader, baseVersion: v.baseVersion
-            })),
-            inheritsFromIds: [...inheritsFromIds],
-            filteredIds: result.map(v => v.id)
-        };
-        const debugPath = path.join(DATA_DIR, 'debug-versions.json');
-        fs.writeFileSync(debugPath, JSON.stringify(debugInfo, null, 2));
-    } catch (_) {}
+    const result = installed.filter(v => !inheritsFromIds.has(v.id));
 
     _versionsCache = result;
     _versionsCacheTime = Date.now();
@@ -6438,7 +6406,7 @@ async function getLibericaLatestVersion(majorVersion) {
         clearTimeout(timer);
         const html = await resp.text();
 
-        const versionRegex = /bellsoft-jdk([\d.+]+)-linux-amd64\.tar\.gz/g;
+        const versionRegex = /bellsoft-jdk([\d.u+b]+)-linux-amd64\.tar\.gz/g;
         const allVersions = [];
         let m;
         while ((m = versionRegex.exec(html)) !== null) {
@@ -6523,16 +6491,22 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
                 clearTimeout(timer);
                 if (!resp.ok) return { hostname, ok: false, latency: Infinity };
                 const html = await resp.text();
-                const dirRegex = /href="[^"]*?(jdk-\d+\.\d+\.\d+%2B\d+)[^"]*?"/g;
+                const dirRegex = /href="[^"]*?(jdk8u\d+b\d+|jdk-\d+\.\d+\.\d+(?:%2B|\+)\d+)[^"]*?"/g;
                 const dirs = [];
                 let dm;
                 while ((dm = dirRegex.exec(html)) !== null) dirs.push(decodeURIComponent(dm[1]));
                 if (dirs.length === 0) return { hostname, ok: false, latency: Infinity };
                 dirs.sort().reverse();
                 const latestDir = dirs[0];
-                const vm = latestDir.match(/jdk-(\d+)\.(\d+)\.(\d+)\+(\d+)/);
-                if (!vm) return { hostname, ok: false, latency: Infinity };
-                const testFileName = `OpenJDK${majorVersion}U-jdk_${arch}_${osName}_hotspot_${vm[2]}.${vm[3]}_${vm[4]}.zip`;
+                let testFileName;
+                const vm8 = latestDir.match(/jdk(\d+u\d+b\d+)/);
+                if (vm8) {
+                    testFileName = `OpenJDK${majorVersion}U-jdk_${arch}_${osName}_hotspot_${vm8[1]}.zip`;
+                } else {
+                    const vm = latestDir.match(/jdk-(\d+)\.(\d+)\.(\d+)\+(\d+)/);
+                    if (!vm) return { hostname, ok: false, latency: Infinity };
+                    testFileName = `OpenJDK${majorVersion}U-jdk_${arch}_${osName}_hotspot_${vm[2]}.${vm[3]}_${vm[4]}.zip`;
+                }
                 const testUrl = mirrorBase + latestDir + '/' + testFileName;
                 const h2 = new AbortController();
                 const t2 = setTimeout(() => h2.abort(), 5000);
@@ -8325,8 +8299,25 @@ function buildClasspath(versionJson, versionId, externalVersionDir = null) {
     return dedupedClasspath.join(process.platform === 'win32' ? ';' : ':');
 }
 
+// PCL2核心策略: Natives目录三级回退，避免非ASCII路径导致 UnsatisfiedLinkError
+function getNativesFolder(versionId) {
+    const primary = path.join(VERSIONS_DIR, versionId, 'natives');
+    const isAscii = /^[\x00-\x7F]*$/.test(primary);
+    if (isAscii) return primary;
+
+    const fallback1 = path.join(os.homedir(), '.versepc', 'bin', 'natives');
+    if (/^[\x00-\x7F]*$/.test(fallback1)) return fallback1;
+
+    const fallback2 = path.join(os.homedir(), '.minecraft', 'bin', 'natives');
+    if (/^[\x00-\x7F]*$/.test(fallback2)) return fallback2;
+
+    const fallback3 = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'versepc-natives');
+    return fallback3;
+}
+
 function extractNatives(versionJson, versionId, externalVersionDir = null) {
-    const nativesDir = path.join(VERSIONS_DIR, versionId, 'natives');
+    const nativesDir = getNativesFolder(versionId);
+    console.log(`[Natives] 目录: ${nativesDir}`);
     if (fs.existsSync(nativesDir)) {
         try { fs.rmSync(nativesDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -8349,6 +8340,11 @@ function extractNatives(versionJson, versionId, externalVersionDir = null) {
         nativeSearchBases.push(path.join(externalRoot, 'libraries'));
     }
     nativeSearchBases.push(LIBRARIES_DIR);
+    // PCL2策略: 整合包的LWJGL natives可能来自用户已有的 .minecraft 目录
+    const mcLibDir = path.join(MINECRAFT_DIR, '.minecraft', 'libraries');
+    if (mcLibDir !== LIBRARIES_DIR && fs.existsSync(mcLibDir)) {
+        nativeSearchBases.push(mcLibDir);
+    }
 
     function findNativeJar(baseHref) {
         for (const base of nativeSearchBases) {
@@ -8373,9 +8369,10 @@ function extractNatives(versionJson, versionId, externalVersionDir = null) {
                 if (entryName.endsWith('.gitkeep') || entryName.endsWith('.gitignore')) continue;
                 if (entryName.endsWith('.sha1') || entryName.endsWith('.git')) continue;
                 const ext = path.extname(entryName).toLowerCase();
+                // PCL2核心策略: 只解压原生二进制文件(.dll/.so/.dylib)，不解压配置文件
+                // 配置文件冲突会导致模组加载异常
                 const isNative = ext === '.dll' || ext === '.so' || ext === '.jnilib' || ext === '.dylib';
-                const isConfig = ext === '.json' || ext === '.cfg' || ext === '.properties' || ext === '.toml';
-                if (isNative || isConfig) {
+                if (isNative) {
                     const fileName = path.basename(entryName);
                     const destPath = path.join(nativesDir, fileName);
                     try {
@@ -8419,8 +8416,7 @@ function extractNatives(versionJson, versionId, externalVersionDir = null) {
                         } else {
                             const ext = path.extname(item).toLowerCase();
                             const isNative = ext === '.dll' || ext === '.so' || ext === '.jnilib' || ext === '.dylib';
-                            const isConfig = ext === '.json' || ext === '.cfg' || ext === '.properties' || ext === '.toml';
-                            if (isNative || isConfig) {
+                            if (isNative) {
                                 const destPath = path.join(nativesDir, item);
                                 fs.copyFileSync(itemPath, destPath);
                                 extracted++;
@@ -8879,12 +8875,16 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
     }
     const hasUserMemOpt = jvmArgs.some(a => a.includes('StringDeduplication') || a.includes('CompressedClassSpaceSize') || a.includes('MetaspaceSize'));
     if (!hasUserMemOpt && maxMemMB >= 2048) {
-        // -XX:+UseStringDeduplication only works with G1GC (not ZGC/Shenandoah)
         const usingG1 = jvmArgs.some(a => a.includes('UseG1GC'));
         if (usingG1) {
             jvmArgs.push('-XX:+UseStringDeduplication');
         }
         jvmArgs.push('-XX:CompressedClassSpaceSize=256m', '-XX:MaxMetaspaceSize=512m');
+    }
+
+    if (!jvmArgs.some(a => a.includes('preferIPv4Stack') || a.includes('preferIPv6Stack'))) {
+        jvmArgs.push('-Djava.net.preferIPv4Stack=true');
+        jvmArgs.push('-Djava.net.preferIPv4Addresses=true');
     }
 
     if (settings.javaArgs && settings.javaArgs.trim()) {
@@ -9105,9 +9105,6 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
     }
 
     } else {
-        if (!jvmArgs.some(a => a.includes('java.library.path') || a.includes('natives_directory'))) {
-            jvmArgs.push(`-Djava.library.path=${nativesDir}`);
-        }
         if (!jvmArgs.some(a => a.includes('minecraft.launcher.brand'))) {
             jvmArgs.push('-Dminecraft.launcher.brand=VersePC');
             jvmArgs.push('-Dminecraft.launcher.version=1.0.0');
@@ -9115,6 +9112,30 @@ function buildLaunchArguments(versionJson, settings, account, versionId, customG
         if (!jvmArgs.some(a => a.includes('log4j2.formatMsgNoLookups'))) {
             jvmArgs.push('-Dlog4j2.formatMsgNoLookups=true');
         }
+    }
+
+    // PCL2核心策略: 始终固定添加 java.library.path，不依赖 JSON 参数中的变量替换
+    // 整合包的版本JSON可能缺少此参数或变量替换失败，导致 UnsatisfiedLinkError
+    const hasJvmLibraryPath = jvmArgs.some(a => typeof a === 'string' && a.includes('java.library.path'));
+    if (!hasJvmLibraryPath) {
+        jvmArgs.push(`-Djava.library.path=${nativesDir}`);
+        console.log(`[Launch] 补充 java.library.path=${nativesDir}`);
+    } else {
+        const existingIdx = jvmArgs.findIndex(a => typeof a === 'string' && a.includes('java.library.path'));
+        if (existingIdx >= 0) {
+            const val = jvmArgs[existingIdx];
+            if (val.includes('${natives_directory}') || val.includes('$natives_directory')) {
+                jvmArgs[existingIdx] = val.replace(/\$\{?natives_directory\}?/g, nativesDir);
+                console.log(`[Launch] 修复未替换的 natives_directory 变量 -> ${nativesDir}`);
+            }
+        }
+    }
+    if (!jvmArgs.some(a => a.includes('minecraft.launcher.brand'))) {
+        jvmArgs.push('-Dminecraft.launcher.brand=VersePC');
+        jvmArgs.push('-Dminecraft.launcher.version=1.0.0');
+    }
+    if (!jvmArgs.some(a => a.includes('log4j2.formatMsgNoLookups'))) {
+        jvmArgs.push('-Dlog4j2.formatMsgNoLookups=true');
     }
 
     if (process.platform === 'darwin') {
@@ -9425,6 +9446,38 @@ async function launchGame(versionId, settings, account) {
     }
 
     console.log(`[LaunchGame] JSON已解析, mainClass: ${versionJson.mainClass}, inheritsFrom: ${versionJson.inheritsFrom}`);
+
+    // PCL2核心策略: 启动前验证Natives完整性，缺失时自动重新解压
+    {
+        const nativesDir = getNativesFolder(cleanVersionId);
+        const criticalNatives = ['lwjgl.dll', 'lwjgl_opengl.dll', 'lwjgl_glfw.dll', 'lwjgl_stb.dll', 'lwjgl_tinyfd.dll',
+            'openal.dll', 'jinput-dx8.dll', 'jinput-raw.dll'];
+        const missingNatives = criticalNatives.filter(n => {
+            if (process.platform === 'win32') return !fs.existsSync(path.join(nativesDir, n));
+            if (process.platform === 'darwin') return !fs.existsSync(path.join(nativesDir, n.replace('.dll', '.dylib')));
+            return !fs.existsSync(path.join(nativesDir, n.replace('.dll', '.so')));
+        });
+        if (missingNatives.length > 0 && missingNatives.length < 6) {
+            console.log(`[LaunchGame] 检测到 ${missingNatives.length} 个缺失Natives: ${missingNatives.join(', ')}，尝试重新解压...`);
+            try {
+                extractNatives(versionJson, cleanVersionId, externalVersionDir);
+                const recheckMissing = criticalNatives.filter(n => {
+                    if (process.platform === 'win32') return !fs.existsSync(path.join(nativesDir, n));
+                    if (process.platform === 'darwin') return !fs.existsSync(path.join(nativesDir, n.replace('.dll', '.dylib')));
+                    return !fs.existsSync(path.join(nativesDir, n.replace('.dll', '.so')));
+                });
+                if (recheckMissing.length > 0) {
+                    console.warn(`[LaunchGame] 重新解压后仍有 ${recheckMissing.length} 个Natives缺失: ${recheckMissing.join(', ')}`);
+                } else {
+                    console.log(`[LaunchGame] Natives重新解压成功`);
+                }
+            } catch (e) {
+                console.error(`[LaunchGame] Natives重新解压失败: ${e.message}`);
+            }
+        } else if (missingNatives.length >= 6) {
+            console.warn(`[LaunchGame] ⚠ 大量Natives缺失(${missingNatives.length}个)，可能影响游戏启动`);
+        }
+    }
 
     let depCheck = await checkDependencies(cleanVersionId, settings, externalVersionDir);
 
@@ -9977,6 +10030,7 @@ async function doLaunch(versionId, versionJson, settings, account, externalVersi
         console.log(`[Launch] 版本隔离: ${effectiveIsolation ? '是' : '否'}`);
     }
 
+    const nativesDir = getNativesFolder(versionId);
     const args = buildLaunchArguments(versionJson, settings, account, versionId, gameDir, externalVersionDir);
     console.log(`[Launch] 启动参数数量: ${args.length}`);
     
@@ -13048,6 +13102,9 @@ async function performInstallation(sessionId, versionDetails) {
         session.speed = 0;
         if (speedSyncTimer) clearInterval(speedSyncTimer);
 
+        _versionsCache = null;
+        _versionsCacheTime = 0;
+
         console.log(`Installation completed: ${versionId}`);
 
     } catch (e) {
@@ -13191,6 +13248,19 @@ async function handleHttpRequest(pathname, req, res, parsedUrl) {
 }
 
 // ─── 整合包本地导入（拖拽安装入口）───
+
+// PCL2策略: 重复版本名自动去重，避免覆盖已有版本
+function _dedupeVersionId(baseName) {
+    let candidate = baseName;
+    let counter = 2;
+    while (fs.existsSync(path.join(VERSIONS_DIR, candidate))) {
+        candidate = `${baseName} (${counter})`;
+        counter++;
+        if (counter > 999) break;
+    }
+    return candidate;
+}
+
 /**
  * 从本地文件路径导入整合包（.mrpack / CurseForge .zip）
  * @param {string} filePath  - 本地文件的绝对路径
@@ -13251,11 +13321,27 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
     let zip;
     try { zip = new AdmZip(filePath); } catch (e) {
         console.error(`[Modpack] 无法读取 ZIP:`, e.message);
+        if (ext === '.rar') {
+            return { success: false, error: '不支持 rar 格式的压缩包，请解压后重新压缩为 zip 格式再试' };
+        }
         return { success: false, error: '无法读取 ZIP 文件: ' + e.message };
+    }
+
+    // PCL2策略: 检测加密ZIP
+    try {
+        const entries = zip.getEntries();
+        const encrypted = entries.some(e => e.header && (e.header.flags & 1) === 1);
+        if (encrypted) {
+            return { success: false, error: '不支持加密的压缩包，请解压后重新压缩为不加密的 zip 格式再试' };
+        }
+    } catch (e) {
+        console.warn(`[Modpack] 检测加密状态失败:`, e.message);
     }
 
     const modrinthEntry = zip.getEntry('modrinth.index.json');
     const curseEntry    = zip.getEntry('manifest.json');
+    const hmclEntry     = zip.getEntry('modpack.json');
+    const mmcEntry      = zip.getEntry('mmc-pack.json');
 
     let result;
     const tempFiles = [];
@@ -13266,6 +13352,9 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
         } else if (curseEntry) {
             console.log(`[Modpack] 检测到 CurseForge 整合包`);
             result = await _importCurseForge(zip, curseEntry, filePath, progress, targetVersion, abortSignal);
+        } else if (hmclEntry) {
+            console.log(`[Modpack] 检测到 HMCL 整合包 (modpack.json)`);
+            result = await _importHmcl(zip, hmclEntry, filePath, progress, targetVersion, abortSignal);
         } else {
             console.log(`[Modpack] 未检测到已知整合包格式，尝试作为普通 ZIP 导入`);
             result = await _importRawZip(zip, filePath, progress, targetVersion, abortSignal);
@@ -13312,10 +13401,14 @@ async function importModpackFromPath(filePath, onProgress, targetVersion = '', a
     }
     
     if (result?.success) {
+        _versionsCache = null;
+        _versionsCacheTime = 0;
         console.log(`[Modpack] ========== 导入成功 ==========`);
         console.log(`[Modpack] 版本ID: ${result.versionId}`);
         console.log(`[Modpack] 整合包名: ${result.name}`);
     } else {
+        _versionsCache = null;
+        _versionsCacheTime = 0;
         console.error(`[Modpack] ========== 导入失败 ==========`);
         console.error(`[Modpack] 错误: ${result?.error}`);
     }
@@ -13379,12 +13472,12 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
             }
         }
         if (!versionDir) {
-            versionId = packName;
+            versionId = _dedupeVersionId(packName);
             versionDir = path.join(VERSIONS_DIR, versionId);
             console.log(`[Modpack] 目标版本不存在，创建新版本: ${versionId}`);
         }
     } else {
-        versionId = packName;
+        versionId = _dedupeVersionId(packName);
         versionDir = path.join(VERSIONS_DIR, versionId);
         console.log(`[Modpack] 未指定目标版本，创建新版本: ${versionId}`);
     }
@@ -13528,14 +13621,14 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
             }
             await asyncEnsureDir(destPath);
             let extractOk = false;
-            for (let attempt = 1; attempt <= 3; attempt++) {
+            for (let attempt = 1; attempt <= 5; attempt++) {
                 try {
                     await fs.promises.writeFile(destPath, entry.getData());
                     extractOk = true;
                     break;
                 } catch (e) {
                     console.warn(`[Modpack] 解压 ${relPath} 第 ${attempt} 次失败: ${e.message}`);
-                    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 500));
+                    if (attempt < 5) await new Promise(r => setTimeout(r, (attempt - 1) * 2000));
                 }
             }
             if (extractOk) overrideFiles.push({ name: relPath, status: 'completed', progress: 100 });
@@ -13575,6 +13668,7 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
     const PARALLEL_MODS = Math.min(parseInt(settings.maxThreads, 10) || 16, 64);
     let lastProgUpdate = 0;
     let lastReportedPct = 0;
+    let smoothPct = 0;
 
     const getModTimeout = (sizeBytes) => {
         if (sizeBytes > 50 * 1024 * 1024) return 600000;
@@ -13592,8 +13686,14 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         const overallPct = totalPct / Math.max(modFiles.length, 1);
         const pct = 25 + Math.round((overallPct / 100) * 65);
         const clamped = Math.min(pct, 95);
-        if (clamped <= lastReportedPct && now - lastProgUpdate < 500) return;
-        lastReportedPct = Math.max(lastReportedPct, clamped);
+        if (smoothPct <= 0 || clamped <= smoothPct) {
+            smoothPct = clamped;
+        } else {
+            smoothPct = smoothPct * 0.75 + clamped * 0.25;
+        }
+        const finalPct = Math.max(lastReportedPct, Math.round(smoothPct));
+        if (finalPct <= lastReportedPct && now - lastProgUpdate < 200) return;
+        lastReportedPct = finalPct;
         lastProgUpdate = now;
         const totalDone = okCount + failCount;
         progress('mods', `下载 Mod (${totalDone}/${filesList.length}, ${inFlight}个进行中)`, lastReportedPct, [...overrideFiles, ...modFiles], '');
@@ -14042,12 +14142,12 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
             }
         }
         if (!versionDir) {
-            versionId = packName;
+            versionId = _dedupeVersionId(packName);
             versionDir = path.join(VERSIONS_DIR, versionId);
             console.log(`[Modpack] 目标版本不存在，创建新版本: ${versionId}`);
         }
     } else {
-        versionId = packName;
+        versionId = _dedupeVersionId(packName);
         versionDir = path.join(VERSIONS_DIR, versionId);
         console.log(`[Modpack] 未指定目标版本，创建新版本: ${versionId}`);
     }
@@ -14187,14 +14287,14 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
             }
             await asyncEnsureDir(destPath);
             let cfExtractOk = false;
-            for (let attempt = 1; attempt <= 3; attempt++) {
+            for (let attempt = 1; attempt <= 5; attempt++) {
                 try {
                     await fs.promises.writeFile(destPath, entry.getData());
                     cfExtractOk = true;
                     break;
                 } catch (e) {
                     console.warn(`[Modpack] CF解压 ${relPath} 第 ${attempt} 次失败: ${e.message}`);
-                    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 500));
+                    if (attempt < 5) await new Promise(r => setTimeout(r, (attempt - 1) * 2000));
                 }
             }
             if (cfExtractOk) overrideFiles.push({ name: relPath, status: 'completed', progress: 100 });
@@ -14556,6 +14656,132 @@ async function _importCurseForge(zip, manifestEntry, filePath, progress, targetV
     }
 }
 
+// HMCL整合包格式 (modpack.json) - PCL2支持的格式之一
+async function _importHmcl(zip, hmclEntry, filePath, progress, targetVersion = '', abortSignal = null) {
+    console.log(`[HMCL] ========== 开始解析 HMCL 整合包 ==========`);
+    let hmclMeta;
+    try {
+        hmclMeta = JSON.parse(hmclEntry.getData().toString('utf8'));
+    } catch (e) {
+        return { success: false, error: '解析 modpack.json 失败: ' + e.message };
+    }
+
+    const packName  = (hmclMeta.name || path.basename(filePath, path.extname(filePath))).replace(/[<>:"/\\|?*]/g, '_');
+    const mcVersion = hmclMeta.gameVersion || '';
+    const author    = hmclMeta.author || '';
+
+    console.log(`[HMCL] 整合包: ${packName}, MC: ${mcVersion}, 作者: ${author}`);
+    progress('prepare', `整合包: ${packName}  MC: ${mcVersion}`, 8);
+
+    let versionId = targetVersion ? targetVersion.replace(' [外部]', '') : _dedupeVersionId(packName);
+    let versionDir = path.join(VERSIONS_DIR, versionId);
+
+    if (targetVersion) {
+        const existingDir = path.join(VERSIONS_DIR, versionId);
+        if (fs.existsSync(existingDir)) {
+            // 使用已有版本
+        } else {
+            const extFolders = loadExternalFolders();
+            for (const folder of extFolders) {
+                if (!fs.existsSync(folder.path)) continue;
+                const extVers = scanExternalFolder(folder.path);
+                const extV = extVers.find(v => v.id === versionId);
+                if (extV) { versionDir = extV.externalVersionDir; break; }
+            }
+        }
+        if (!fs.existsSync(versionDir)) {
+            versionId = _dedupeVersionId(packName);
+            versionDir = path.join(VERSIONS_DIR, versionId);
+        }
+    }
+
+    const isNewVersion = !fs.existsSync(path.join(versionDir, `${versionId}.json`));
+    if (!fs.existsSync(versionDir)) fs.mkdirSync(versionDir, { recursive: true });
+
+    let loaderVersionId = null;
+
+    if (isNewVersion && mcVersion) {
+        progress('base', '正在准备基础版本...', 10);
+        const baseResult = await ensureBaseVersionInstalled(mcVersion);
+        if (baseResult.error) {
+            try { if (fs.existsSync(versionDir)) fs.rmSync(versionDir, { recursive: true, force: true }); } catch (e) {}
+            return { success: false, versionId, error: baseResult.error };
+        }
+
+        const addons = hmclMeta.addons || [];
+        for (const addon of addons) {
+            const uid = (addon.uid || '').toLowerCase();
+            const ver = addon.version || '';
+            if (uid === 'net.minecraftforge' && ver) {
+                progress('loader-install', '正在安装Forge...', 12);
+                loaderVersionId = `${mcVersion}-forge-${ver}`;
+                const lvJson = path.join(VERSIONS_DIR, loaderVersionId, `${loaderVersionId}.json`);
+                if (!fs.existsSync(lvJson)) {
+                    const ir = await installForge(mcVersion, ver, (p, msg) => progress('loader-install', msg || '正在安装Forge...', 12 + p * 3));
+                    if (!ir.success) { cleanupVersionChain(versionId); return { success: false, versionId, error: ir.error }; }
+                }
+                break;
+            } else if (uid === 'net.neoforged' && ver) {
+                progress('loader-install', '正在安装NeoForge...', 12);
+                loaderVersionId = `${mcVersion}-neoforge-${ver}`;
+                const lvJson = path.join(VERSIONS_DIR, loaderVersionId, `${loaderVersionId}.json`);
+                if (!fs.existsSync(lvJson)) {
+                    const ir = await installNeoForge(mcVersion, ver, (p, msg) => progress('loader-install', msg || '正在安装NeoForge...', 12 + p * 3));
+                    if (!ir.success) { cleanupVersionChain(versionId); return { success: false, versionId, error: ir.error }; }
+                }
+                break;
+            } else if (uid === 'net.fabricmc.fabric-loader' && ver) {
+                progress('loader-install', '正在安装Fabric...', 12);
+                loaderVersionId = `fabric-loader-${ver}-${mcVersion}`;
+                const lvJson = path.join(VERSIONS_DIR, loaderVersionId, `${loaderVersionId}.json`);
+                if (!fs.existsSync(lvJson)) {
+                    const ir = await installFabric(mcVersion, ver, (p, msg) => progress('loader-install', msg || '正在安装Fabric...', 12 + p * 3));
+                    if (!ir.success) { cleanupVersionChain(versionId); return { success: false, versionId, error: ir.error }; }
+                }
+                break;
+            }
+        }
+
+        const versionJson = { id: versionId, inheritsFrom: loaderVersionId || mcVersion, type: 'release', time: new Date().toISOString(), releaseTime: new Date().toISOString() };
+        if (loaderVersionId) {
+            try {
+                const lvJsonPath = path.join(VERSIONS_DIR, loaderVersionId, `${loaderVersionId}.json`);
+                if (fs.existsSync(lvJsonPath)) { const lvJson = JSON.parse(fs.readFileSync(lvJsonPath, 'utf-8')); if (lvJson.mainClass) versionJson.mainClass = lvJson.mainClass; }
+            } catch (e) {}
+        }
+        fs.writeFileSync(path.join(versionDir, `${versionId}.json`), JSON.stringify(versionJson, null, 2));
+    }
+
+    progress('extract', '解压覆盖文件...', 20);
+    const entries = zip.getEntries();
+    let extractCounter = 0;
+    for (const entry of entries) {
+        if (entry.isDirectory) continue;
+        const entryName = entry.entryName;
+        if (entryName === 'modpack.json') continue;
+        const destPath = path.resolve(versionDir, entryName);
+        if (!destPath.startsWith(path.resolve(versionDir) + path.sep)) continue;
+        await asyncEnsureDir(destPath);
+        for (let attempt = 1; attempt <= 5; attempt++) {
+            try { await fs.promises.writeFile(destPath, entry.getData()); break; } catch (e) {
+                if (attempt < 5) await new Promise(r => setTimeout(r, (attempt - 1) * 2000));
+            }
+        }
+        if (++extractCounter % 50 === 0) await yieldToEventLoop();
+    }
+
+    const packInfo = { name: packName, versionId, packFormat: 'hmcl', importedAt: new Date().toISOString(), sourceFile: filePath, author };
+    fs.writeFileSync(path.join(versionDir, 'pack-info.json'), JSON.stringify(packInfo, null, 2));
+
+    if (loaderVersionId) {
+        progress('verify', '正在验证依赖完整性...', 90);
+        await verifyImportLibs(versionId, progress, abortSignal);
+    }
+
+    progress('done', `"${packName}" 导入完成！`, 100);
+    return { success: true, name: packName, versionId, targetVersion: targetVersion || '', loaderVersionId };
+}
+
 async function _importRawZip(zip, filePath, progress, targetVersion = '', abortSignal = null) {
     const settings = loadSettingsCached();
     const packName   = path.basename(filePath, path.extname(filePath)).replace(/[<>:"/\\|?*]/g, '_');
@@ -14584,12 +14810,12 @@ async function _importRawZip(zip, filePath, progress, targetVersion = '', abortS
             }
         }
         if (!versionDir) {
-            versionId = packName;
+            versionId = _dedupeVersionId(packName);
             versionDir = path.join(VERSIONS_DIR, versionId);
             console.log(`[RawZip] 目标版本不存在，创建新版本: ${versionId}`);
         }
     } else {
-        versionId = packName;
+        versionId = _dedupeVersionId(packName);
         versionDir = path.join(VERSIONS_DIR, versionId);
         console.log(`[RawZip] 未指定目标版本，创建新版本: ${versionId}`);
     }
@@ -14614,13 +14840,13 @@ async function _importRawZip(zip, filePath, progress, targetVersion = '', abortS
                 await asyncEnsureDir(path.join(versionDir, entryName, 'dummy.txt'));
             } else {
                 await asyncEnsureDir(path.join(versionDir, entryName));
-                for (let attempt = 1; attempt <= 3; attempt++) {
+                for (let attempt = 1; attempt <= 5; attempt++) {
                     try {
                         await fs.promises.writeFile(destPath, entry.getData());
                         break;
                     } catch (e) {
                         console.warn(`[Modpack] RawZip解压 ${entryName} 第 ${attempt} 次失败: ${e.message}`);
-                        if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 500));
+                        if (attempt < 5) await new Promise(r => setTimeout(r, (attempt - 1) * 2000));
                     }
                 }
                 if (++rzExtractYieldCounter % 50 === 0) await yieldToEventLoop();
@@ -14884,7 +15110,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
             case '/api/versions': {
                 const forceRefresh = parsedUrl.query.refresh === 'true';
                 const installedOnly = parsedUrl.query.installed === 'true';
-                const installedList = getInstalledVersions();
+                const installedList = getInstalledVersions(forceRefresh);
                 const installedIds = new Set();
                 const installedBaseIds = new Set();
                 for (const v of installedList) {
@@ -15227,8 +15453,41 @@ async function handleAPI(pathname, req, res, parsedUrl) {
 
                 const safeName = (fileName || `${projectId}.jar`).replace(/[^a-zA-Z0-9._\-]/g, '_');
                 const destPath = path.join(modsDestDir, safeName);
-                await downloadFile(downloadUrl, destPath, null, 2);
-                sendJSON({ success: true, message: `模组 ${safeName} 下载成功`, path: destPath, fileName: safeName });
+
+                const sessionId = `mod-${Date.now()}`;
+                modDownloadSessions.set(sessionId, {
+                    status: 'downloading', progress: 0, message: '下载中..',
+                    fileName: safeName, totalSize: 0, downloaded: 0,
+                    dependencies: 0, currentDep: 0
+                });
+
+                sendJSON({ success: true, sessionId, fileName: safeName, path: destPath });
+
+                (async () => {
+                    try {
+                        await downloadFile(downloadUrl, destPath, (p) => {
+                            const session = modDownloadSessions.get(sessionId);
+                            if (session) {
+                                session.progress = Math.round(p.progress);
+                                session.downloaded = p.bytesDownloaded || 0;
+                                session.message = `下载 ${safeName} ${p.progress.toFixed(0)}%`;
+                            }
+                        }, 2);
+
+                        const session = modDownloadSessions.get(sessionId);
+                        if (session) {
+                            session.status = 'completed';
+                            session.progress = 100;
+                            session.message = `${safeName} 下载完成！`;
+                        }
+                    } catch (e) {
+                        const session = modDownloadSessions.get(sessionId);
+                        if (session) {
+                            session.status = 'failed';
+                            session.message = `下载失败: ${e.message}`;
+                        }
+                    }
+                })();
                 break;
             }
 
@@ -15349,13 +15608,21 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                             const msTokenResult = await new Promise((resolve, reject) => {
                                 const req = https.request(tokenUrl, {
                                     method: 'POST',
-                                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) }
+                                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) },
+                                    timeout: 15000
                                 }, (res) => {
                                     let data = '';
                                     res.on('data', chunk => data += chunk);
-                                    res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
+                                    res.on('end', () => {
+                                        if (res.statusCode >= 400) {
+                                            try { const errBody = JSON.parse(data); resolve(errBody); } catch (e) { resolve({ error: `HTTP ${res.statusCode}` }); }
+                                            return;
+                                        }
+                                        try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('微软服务返回了无效的数据')); }
+                                    });
                                 });
-                                req.on('error', reject);
+                                req.on('error', (e) => reject(new Error('网络连接失败: ' + e.message)));
+                                req.on('timeout', () => { req.destroy(); reject(new Error('连接微软服务超时')); });
                                 req.write(postData);
                                 req.end();
                             });
@@ -15842,7 +16109,10 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     if (verSettings.memoryMode === 'custom') maxMem = verSettings.memoryValue || maxMem;
                     const minMem = Math.min(1024, maxMem);
                     const javaPath = verSettings.javaPath === 'global' ? (globalSettings.javaPath || 'java') : verSettings.javaPath;
-                    const jvmArgs = verSettings.jvmArgs || globalSettings.javaArgs || '';
+                    let jvmArgs = verSettings.jvmArgs || globalSettings.javaArgs || '';
+                    if (!jvmArgs.includes('preferIPv4Stack') && !jvmArgs.includes('preferIPv6Stack')) {
+                        jvmArgs += ' -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Addresses=true';
+                    }
                     const customGameArgs = verSettings.gameArgs || '';
                     const assetsDir = path.join(DATA_DIR, 'assets');
                     const assetIndex = parentJson.assetIndex ? parentJson.assetIndex.id : actualVersionId;
@@ -17377,25 +17647,71 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 try {
                     const deviceCodeUrl = `https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode`;
                     const postData = `client_id=${MS_CLIENT_ID}&scope=XboxLive.signin+offline_access`;
-                    const result = await new Promise((resolve, reject) => {
-                        const req = https.request(deviceCodeUrl, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                                'Content-Length': Buffer.byteLength(postData)
-                            }
-                        }, (res) => {
-                            let data = '';
-                            res.on('data', chunk => data += chunk);
-                            res.on('end', () => {
-                                try { resolve(JSON.parse(data)); }
-                                catch (e) { reject(e); }
+
+                    async function requestDeviceCode(retryCount = 0) {
+                        return new Promise((resolve, reject) => {
+                            const req = https.request(deviceCodeUrl, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                    'Content-Length': Buffer.byteLength(postData)
+                                },
+                                timeout: 15000
+                            }, (res) => {
+                                let data = '';
+                                res.on('data', chunk => data += chunk);
+                                res.on('end', () => {
+                                    if (res.statusCode === 429) {
+                                        const retryAfter = parseInt(res.headers['retry-after'] || '5', 10);
+                                        const err = new Error(`请求过于频繁，请等待 ${retryAfter} 秒后重试`);
+                                        err.isRateLimit = true;
+                                        err.retryAfter = retryAfter;
+                                        reject(err);
+                                        return;
+                                    }
+                                    if (res.statusCode >= 400) {
+                                        let errDetail = '';
+                                        try {
+                                            const errBody = JSON.parse(data);
+                                            errDetail = errBody.error_description || errBody.error || data.substring(0, 200);
+                                        } catch (e) { errDetail = data.substring(0, 200); }
+                                        const err = new Error(`微软服务返回错误 (HTTP ${res.statusCode}): ${errDetail}`);
+                                        err.httpStatus = res.statusCode;
+                                        reject(err);
+                                        return;
+                                    }
+                                    try { resolve(JSON.parse(data)); }
+                                    catch (e) { reject(new Error('微软服务返回了无效的数据')); }
+                                });
                             });
+                            req.on('error', (e) => {
+                                if (retryCount < 2 && (e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT' || e.code === 'ENOTFOUND' || e.code === 'ECONNREFUSED')) {
+                                    setTimeout(() => {
+                                        requestDeviceCode(retryCount + 1).then(resolve).catch(reject);
+                                    }, 1000 * (retryCount + 1));
+                                } else {
+                                    reject(new Error('网络连接失败: ' + e.message));
+                                }
+                            });
+                            req.on('timeout', () => {
+                                req.destroy();
+                                if (retryCount < 2) {
+                                    setTimeout(() => {
+                                        requestDeviceCode(retryCount + 1).then(resolve).catch(reject);
+                                    }, 1000 * (retryCount + 1));
+                                } else {
+                                    reject(new Error('连接微软服务超时，请检查网络'));
+                                }
+                            });
+                            req.write(postData);
+                            req.end();
                         });
-                        req.on('error', reject);
-                        req.write(postData);
-                        req.end();
-                    });
+                    }
+
+                    const result = await requestDeviceCode();
+                    if (!result.device_code) {
+                        throw new Error('微软服务未返回设备码');
+                    }
                     sendJSON({
                         success: true,
                         deviceCode: result.device_code,
@@ -17407,7 +17723,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         message: result.message
                     });
                 } catch (e) {
-                    sendError('获取设备码失败 ' + e.message);
+                    console.error('[MSAuth] 获取设备码失败:', e.message);
+                    sendError('获取设备码失败: ' + e.message);
                 }
                 break;
             }
@@ -17427,16 +17744,42 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                             headers: {
                                 'Content-Type': 'application/x-www-form-urlencoded',
                                 'Content-Length': Buffer.byteLength(postData)
-                            }
+                            },
+                            timeout: 15000
                         }, (res) => {
                             let data = '';
                             res.on('data', chunk => data += chunk);
                             res.on('end', () => {
+                                if (res.statusCode === 429) {
+                                    const retryAfter = parseInt(res.headers['retry-after'] || '5', 10);
+                                    const err = new Error(`请求过于频繁，请等待 ${retryAfter} 秒后重试`);
+                                    err.isRateLimit = true;
+                                    err.retryAfter = retryAfter;
+                                    reject(err);
+                                    return;
+                                }
+                                if (res.statusCode >= 400 && res.statusCode !== 400) {
+                                    let errDetail = '';
+                                    try {
+                                        const errBody = JSON.parse(data);
+                                        errDetail = errBody.error_description || errBody.error || data.substring(0, 200);
+                                    } catch (e) { errDetail = data.substring(0, 200); }
+                                    const err = new Error(`微软服务返回错误 (HTTP ${res.statusCode}): ${errDetail}`);
+                                    err.httpStatus = res.statusCode;
+                                    reject(err);
+                                    return;
+                                }
                                 try { resolve(JSON.parse(data)); }
-                                catch (e) { reject(e); }
+                                catch (e) { reject(new Error('微软服务返回了无效的数据')); }
                             });
                         });
-                        req.on('error', reject);
+                        req.on('error', (e) => {
+                            reject(new Error('网络连接失败: ' + e.message));
+                        });
+                        req.on('timeout', () => {
+                            req.destroy();
+                            reject(new Error('连接微软服务超时，请检查网络'));
+                        });
                         req.write(postData);
                         req.end();
                     });
@@ -17592,16 +17935,42 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                             headers: {
                                 'Content-Type': 'application/x-www-form-urlencoded',
                                 'Content-Length': Buffer.byteLength(postData)
-                            }
+                            },
+                            timeout: 15000
                         }, (res) => {
                             let data = '';
                             res.on('data', chunk => data += chunk);
                             res.on('end', () => {
+                                if (res.statusCode === 429) {
+                                    const retryAfter = parseInt(res.headers['retry-after'] || '5', 10);
+                                    const err = new Error(`请求过于频繁，请等待 ${retryAfter} 秒后重试`);
+                                    err.isRateLimit = true;
+                                    err.retryAfter = retryAfter;
+                                    reject(err);
+                                    return;
+                                }
+                                if (res.statusCode >= 400) {
+                                    let errDetail = '';
+                                    try {
+                                        const errBody = JSON.parse(data);
+                                        errDetail = errBody.error_description || errBody.error || data.substring(0, 200);
+                                    } catch (e) { errDetail = data.substring(0, 200); }
+                                    const err = new Error(`微软服务返回错误 (HTTP ${res.statusCode}): ${errDetail}`);
+                                    err.httpStatus = res.statusCode;
+                                    reject(err);
+                                    return;
+                                }
                                 try { resolve(JSON.parse(data)); }
-                                catch (e) { reject(e); }
+                                catch (e) { reject(new Error('微软服务返回了无效的数据')); }
                             });
                         });
-                        req.on('error', reject);
+                        req.on('error', (e) => {
+                            reject(new Error('网络连接失败: ' + e.message));
+                        });
+                        req.on('timeout', () => {
+                            req.destroy();
+                            reject(new Error('连接微软服务超时，请检查网络'));
+                        });
                         req.write(postData);
                         req.end();
                     });
@@ -19540,40 +19909,42 @@ async function handleAPI(pathname, req, res, parsedUrl) {
 
                         sendJSON({ success: true, sessionId, fileName: safeName });
 
-                        try {
-                            await downloadFile(downloadUrl, destPath, (p) => {
+                        (async () => {
+                            try {
+                                await downloadFile(downloadUrl, destPath, (p) => {
+                                    const session = modDownloadSessions.get(sessionId);
+                                    if (session) {
+                                        session.progress = Math.round(p.progress);
+                                        session.downloaded = p.bytesDownloaded || 0;
+                                        session.message = `下载 ${safeName} ${p.progress.toFixed(0)}%`;
+                                    }
+                                }, 2);
+
+                                for (let di = 0; di < depDownloads.length; di++) {
+                                    const dep = depDownloads[di];
+                                    const session = modDownloadSessions.get(sessionId);
+                                    if (session) {
+                                        session.currentDep = di + 1;
+                                        session.message = `下载依赖 ${dep.fileName}`;
+                                        session.progress = 50 + Math.round((di / depDownloads.length) * 50);
+                                    }
+                                    await downloadFile(dep.url, dep.dest, null, 2);
+                                }
+
                                 const session = modDownloadSessions.get(sessionId);
                                 if (session) {
-                                    session.progress = Math.round(p.progress);
-                                    session.downloaded = p.bytesDownloaded || 0;
-                                    session.message = `下载 ${safeName} ${p.progress.toFixed(0)}%`;
+                                    session.status = 'completed';
+                                    session.progress = 100;
+                                    session.message = `${safeName} 下载完成！`;
                                 }
-                            }, 2);
-
-                            for (let di = 0; di < depDownloads.length; di++) {
-                                const dep = depDownloads[di];
+                            } catch (e) {
                                 const session = modDownloadSessions.get(sessionId);
                                 if (session) {
-                                    session.currentDep = di + 1;
-                                    session.message = `下载依赖 ${dep.fileName}`;
-                                    session.progress = 50 + Math.round((di / depDownloads.length) * 50);
+                                    session.status = 'failed';
+                                    session.message = `下载失败: ${e.message}`;
                                 }
-                                await downloadFile(dep.url, dep.dest, null, 2);
                             }
-
-                            const session = modDownloadSessions.get(sessionId);
-                            if (session) {
-                                session.status = 'completed';
-                                session.progress = 100;
-                                session.message = `${safeName} 下载完成！`;
-                            }
-                        } catch (e) {
-                            const session = modDownloadSessions.get(sessionId);
-                            if (session) {
-                                session.status = 'failed';
-                                session.message = `下载失败: ${e.message}`;
-                            }
-                        }
+                        })();
                     } else {
                         sendError('Unsupported source', 400);
                     }
@@ -20214,6 +20585,8 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                             s.message = `整合包 "${importResult.name || packName}" 安装完成！`;
                                             if (importResult.warning) s.warning = importResult.warning;
                                         }
+                                        _versionsCache = null;
+                                        _versionsCacheTime = 0;
                                         try { fs.unlinkSync(destPath); } catch (e) {}
                                     } else {
                                         if (s) {
@@ -20391,12 +20764,80 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 break;
             }
 
+            function yggdrasilRequest(url, body, timeoutMs = 30000, maxRedirects = 3) {
+                return new Promise((resolve, reject) => {
+                    let currentUrl = url;
+                    let redirectCount = 0;
+                    const attempt = (targetUrl) => {
+                        const parsed = new URL(targetUrl);
+                        const mod = parsed.protocol === 'https:' ? https : http;
+                        const reqBody = typeof body === 'string' ? body : JSON.stringify(body);
+                        const req = mod.request({
+                            hostname: parsed.hostname,
+                            port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+                            path: parsed.pathname + parsed.search,
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Content-Length': Buffer.byteLength(reqBody)
+                            },
+                            timeout: timeoutMs,
+                            agent: parsed.protocol === 'https:' ? SHARED_HTTPS_AGENT : undefined
+                        }, (res) => {
+                            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectCount < maxRedirects) {
+                                res.resume();
+                                redirectCount++;
+                                const next = res.headers.location.startsWith('http') ? res.headers.location : `${parsed.protocol}//${parsed.host}${res.headers.location}`;
+                                return attempt(next);
+                            }
+                            let data = '';
+                            res.on('data', chunk => data += chunk);
+                            res.on('end', () => {
+                                if (res.statusCode < 200 || res.statusCode >= 300) {
+                                    let errMsg = `认证服务器返回 HTTP ${res.statusCode}`;
+                                    try { const errBody = JSON.parse(data); errMsg = errBody.errorMessage || errBody.error || errMsg; } catch (_) {}
+                                    return reject(new Error(errMsg));
+                                }
+                                try { resolve(JSON.parse(data)); }
+                                catch (e) { reject(new Error('认证服务器返回了无效的响应')); }
+                            });
+                        });
+                        req.on('timeout', () => { req.destroy(); reject(new Error('连接认证服务器超时，请检查网络连接')); });
+                        req.on('error', (e) => {
+                            if (e.code === 'ECONNREFUSED') reject(new Error('无法连接到认证服务器，请检查服务器地址是否正确'));
+                            else if (e.code === 'ENOTFOUND') reject(new Error('无法解析认证服务器域名，请检查服务器地址'));
+                            else if (e.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || e.code === 'CERT_HAS_EXPIRED' || e.code.includes('CERT')) reject(new Error('认证服务器证书错误: ' + e.message));
+                            else if (e.code === 'ECONNRESET') reject(new Error('与认证服务器的连接被重置'));
+                            else reject(new Error('连接认证服务器失败: ' + e.message));
+                        });
+                        req.write(reqBody);
+                        req.end();
+                    };
+                    attempt(currentUrl);
+                });
+            }
+
+            async function ensureAuthlibInjector() {
+                const aiDir = path.join(DATA_DIR, 'authlib-injector');
+                const aiFiles = fs.existsSync(aiDir) ? fs.readdirSync(aiDir).filter(f => f.endsWith('.jar')) : [];
+                if (aiFiles.length === 0) {
+                    try {
+                        const aiData = await fetchJSON('https://authlib-injector.yushi.moe/artifact/latest.json');
+                        if (!fs.existsSync(aiDir)) fs.mkdirSync(aiDir, { recursive: true });
+                        const aiPath = path.join(aiDir, `authlib-injector-${aiData.version}.jar`);
+                        await downloadFile(aiData.download_url, aiPath);
+                    } catch (e) {
+                        console.log('[Authlib] 下载失败:', e.message);
+                    }
+                }
+            }
+
             case '/api/accounts/thirdparty-verify': {
                 const verifyUrl = parsedUrl.query.serverUrl;
                 if (!verifyUrl) { sendError('Missing serverUrl', 400); break; }
                 try {
                     let apiUrl = verifyUrl.replace(/\/$/, '');
-                    const info = await fetchJSON(apiUrl);
+                    const info = await fetchJSON(apiUrl, 2, 10000);
                     const meta = {
                         serverName: info.meta?.serverName || info.serverName || '未知',
                         implementationName: info.meta?.implementationName || info.implementationName || '',
@@ -20405,7 +20846,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     };
                     sendJSON({ success: true, meta });
                 } catch (e) {
-                    sendJSON({ success: false, error: '无法连接到认证服务器' });
+                    sendJSON({ success: false, error: '无法连接到认证服务器: ' + (e.message || '') });
                 }
                 break;
             }
@@ -20423,36 +20864,11 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     let apiUrl = tlServerUrl.replace(/\/$/, '');
                     const authUrl = `${apiUrl}/authserver/authenticate`;
 
-                    const authPayload = JSON.stringify({
+                    const authResult = await yggdrasilRequest(authUrl, {
                         username: tlUsername,
                         password: tlPassword,
                         requestUser: true,
                         agent: { name: 'Minecraft', version: 1 }
-                    });
-
-                    const authResult = await new Promise((resolve, reject) => {
-                        const parsedUrl2 = new URL(authUrl);
-                        const postData2 = authPayload;
-                        const req = https.request({
-                            hostname: parsedUrl2.hostname,
-                            port: parsedUrl2.port || 443,
-                            path: parsedUrl2.pathname + parsedUrl2.search,
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Content-Length': Buffer.byteLength(postData2)
-                            }
-                        }, (res) => {
-                            let data = '';
-                            res.on('data', chunk => data += chunk);
-                            res.on('end', () => {
-                                try { resolve(JSON.parse(data)); }
-                                catch (e) { reject(new Error('Invalid response')); }
-                            });
-                        });
-                        req.on('error', reject);
-                        req.write(postData2);
-                        req.end();
                     });
 
                     if (authResult.error) {
@@ -20494,36 +20910,12 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     }
                     let refreshResult = null;
                     try {
-                        const refreshUrl = `${apiUrl}/authserver/refresh`;
-                        const refreshPayload = JSON.stringify({
+                        refreshResult = await yggdrasilRequest(`${apiUrl}/authserver/refresh`, {
                             accessToken: authResult.accessToken,
                             clientToken: authResult.clientToken,
                             selectedProfile: profile,
                             requestUser: true
-                        });
-                        refreshResult = await new Promise((resolve, reject) => {
-                            const rParsedUrl = new URL(refreshUrl);
-                            const req = https.request({
-                                hostname: rParsedUrl.hostname,
-                                port: rParsedUrl.port || 443,
-                                path: rParsedUrl.pathname + rParsedUrl.search,
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'Content-Length': Buffer.byteLength(refreshPayload)
-                                }
-                            }, (res) => {
-                                let data = '';
-                                res.on('data', chunk => data += chunk);
-                                res.on('end', () => {
-                                    try { resolve(JSON.parse(data)); }
-                                    catch (e) { reject(e); }
-                                });
-                            });
-                            req.on('error', reject);
-                            req.write(refreshPayload);
-                            req.end();
-                        });
+                        }, 30000);
                         if (refreshResult.accessToken) {
                             authResult.accessToken = refreshResult.accessToken;
                             if (refreshResult.selectedProfile) {
@@ -20548,19 +20940,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     if (extractedSkinModel) {
                         console.log(`[ThirdParty] 从登录响应提取到皮肤模型: ${extractedSkinModel}`);
                     }
-                    const aiDir2 = path.join(DATA_DIR, 'authlib-injector');
-                    const aiFiles = fs.existsSync(aiDir2) ? fs.readdirSync(aiDir2).filter(f => f.endsWith('.jar')) : [];
-                    if (aiFiles.length === 0) {
-                        try {
-                            const aiData2 = await fetchJSON('https://authlib-injector.yushi.moe/artifact/latest.json');
-                            const aiUrl = aiData2.download_url;
-                            if (!fs.existsSync(aiDir2)) fs.mkdirSync(aiDir2, { recursive: true });
-                            const aiPath = path.join(aiDir2, `authlib-injector-${aiData2.version}.jar`);
-                            await downloadFile(aiUrl, aiPath);
-                        } catch (e2) {
-                            console.log('[Authlib] 下载失败:', e2.message);
-                        }
-                    }
+                    await ensureAuthlibInjector();
 
                     const accounts = loadAccounts();
                     const newAccount = {
@@ -20608,36 +20988,11 @@ async function handleAPI(pathname, req, res, parsedUrl) {
 
                 try {
                     let spApiUrl = spServerUrl.replace(/\/$/, '');
-                    const refreshUrl = `${spApiUrl}/authserver/refresh`;
-                    const refreshPayload = JSON.stringify({
+                    const refreshResult = await yggdrasilRequest(`${spApiUrl}/authserver/refresh`, {
                         accessToken: spAccessToken,
                         clientToken: spClientToken,
                         selectedProfile: { id: spProfileId, name: spProfileName || '' },
                         requestUser: true
-                    });
-
-                    const refreshResult = await new Promise((resolve, reject) => {
-                        const rParsedUrl = new URL(refreshUrl);
-                        const req = https.request({
-                            hostname: rParsedUrl.hostname,
-                            port: rParsedUrl.port || 443,
-                            path: rParsedUrl.pathname + rParsedUrl.search,
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Content-Length': Buffer.byteLength(refreshPayload)
-                            }
-                        }, (res) => {
-                            let data = '';
-                            res.on('data', chunk => data += chunk);
-                            res.on('end', () => {
-                                try { resolve(JSON.parse(data)); }
-                                catch (e) { reject(e); }
-                            });
-                        });
-                        req.on('error', reject);
-                        req.write(refreshPayload);
-                        req.end();
                     });
 
                     if (refreshResult.error) {
@@ -20653,16 +21008,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         console.log(`[ThirdParty] 从角色选择响应提取到皮肤URL: ${spExtractedSkinUrl.substring(0, 60)}...`);
                     }
 
-                    const aiDir4 = path.join(DATA_DIR, 'authlib-injector');
-                    const aiFiles4 = fs.existsSync(aiDir4) ? fs.readdirSync(aiDir4).filter(f => f.endsWith('.jar')) : [];
-                    if (aiFiles4.length === 0) {
-                        try {
-                            const aiData4 = await fetchJSON('https://authlib-injector.yushi.moe/artifact/latest.json');
-                            if (!fs.existsSync(aiDir4)) fs.mkdirSync(aiDir4, { recursive: true });
-                            const aiPath4 = path.join(aiDir4, `authlib-injector-${aiData4.version}.jar`);
-                            await downloadFile(aiData4.download_url, aiPath4);
-                        } catch (e4) {}
-                    }
+                    await ensureAuthlibInjector();
 
                     const accounts = loadAccounts();
                     const newAccount = {

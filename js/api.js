@@ -157,11 +157,11 @@ async function fetchWithTimeout(url, options = {}, timeout = 30000) {
 }
 
 // 通用 GET 请求，自动拼接 URL 查询参数
-async function apiGet(path, params = {}) {
+async function apiGet(path, params = {}, timeout = 30000) {
     const query = new URLSearchParams(params).toString();
     const url = `${API_BASE}${path}${query ? '?' + query : ''}`;
     try {
-        const res = await fetchWithTimeout(url);
+        const res = await fetchWithTimeout(url, {}, timeout);
         if (!res.ok) {
             let errMsg = `HTTP ${res.status}`;
             try { const body = await res.json(); if (body.error) errMsg = body.error; } catch (e) {}
@@ -177,13 +177,13 @@ async function apiGet(path, params = {}) {
 }
 
 // 通用 POST 请求，自动设置 JSON 请求头
-async function apiPost(path, data = {}) {
+async function apiPost(path, data = {}, timeout = 30000) {
     try {
         const res = await fetchWithTimeout(`${API_BASE}${path}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
-        });
+        }, timeout);
         if (!res.ok) {
             let errMsg = `HTTP ${res.status}`;
             try { const body = await res.json(); if (body.error) errMsg = body.error; } catch (e) {}
@@ -484,7 +484,7 @@ const API = {
     getResourceVersions: (projectId, loader = '', gameVersion = '') =>
         apiGet('/api/resources/versions', { projectId, loader, gameVersion }),
     downloadResource: (versionId, projectId, projectType = 'mod', targetVersionId = '', savePath = '') =>
-        apiPost('/api/resources/download', { versionId, projectId, projectType, targetVersionId, savePath }),
+        apiPost('/api/resources/download', { versionId, projectId, projectType, targetVersionId, savePath }, 120000),
 
     // === 局域网联机 (LAN) ===
     lanCreateRoom: (name, port, playerName) =>

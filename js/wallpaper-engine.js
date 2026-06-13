@@ -155,6 +155,9 @@ class WallpaperEngine {
             if (this.renderer && this.renderer.setRotationSpeed) {
                 this.renderer.setRotationSpeed(this._savedRotationSpeed);
             }
+            if (this.renderer && this.renderer.setMouseFollow && this._savedMouseFollow) {
+                this.renderer.setMouseFollow(this._savedMouseFollow);
+            }
             this._notifyBrightness(0.5);
         }
     }
@@ -270,6 +273,7 @@ class PanoramaRenderer {
         this.ROTATION_SPEED = 0.005;
         this.mouseFollowEnabled = false;
         this.currentTheme = 'overworld';
+        this._loadSeq = 0;
         this.init();
     }
 
@@ -283,19 +287,28 @@ class PanoramaRenderer {
 
     _loadTextures() {
         if (!this.cube) return;
+        const seq = ++this._loadSeq;
         const loader = new THREE.TextureLoader();
-        const safeTheme = ['overworld', 'nether', 'end', 'panorama'].includes(this.currentTheme) ? this.currentTheme : 'overworld';
+        const safeTheme = ['overworld', 'nether', 'end', 'panorama', 'wild', 'darkforest', 'desert', 'mountains', 'cherry', 'deep_dark'].includes(this.currentTheme) ? this.currentTheme : 'overworld';
         const basePath = 'img/panorama/' + safeTheme + '/';
         const faceOrder = [1, 3, 4, 5, 0, 2];
+        let loadedCount = 0;
         this.cube.material.forEach((mat, i) => {
             loader.load(basePath + 'panorama_' + faceOrder[i] + '.png', (texture) => {
+                if (this._loadSeq !== seq) return; // 丢弃过期加载
                 texture.colorSpace = THREE.SRGBColorSpace;
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
                 mat.map = texture;
                 mat.color = new THREE.Color(0xffffff);
                 mat.needsUpdate = true;
-                this.loaded = true;
+                loadedCount++;
+                if (loadedCount >= 6) this.loaded = true;
+            }, undefined, () => {
+                // 加载失败：如果这是最新请求，保持黑色占位
+                if (this._loadSeq !== seq) return;
+                loadedCount++;
+                if (loadedCount >= 6) this.loaded = true;
             });
         });
     }
@@ -349,12 +362,23 @@ class PanoramaRenderer {
         const clampedDt = Math.min(dt, 100);
         this.autoRotation += this.ROTATION_SPEED * clampedDt * 0.06;
         this.cube.rotation.y = this.autoRotation;
-        this.cube.rotation.x = 0;
+        if (this.mouseFollowEnabled && this.engine) {
+            const mx = this.engine.mouseX || 0;
+            const my = this.engine.mouseY || 0;
+            this.cube.rotation.y += mx * 0.15;
+            this.cube.rotation.x = my * 0.08;
+        } else {
+            this.cube.rotation.x = 0;
+        }
         this.threeRenderer.render(this.threeScene, this.threeCamera);
     }
 
     setRotationSpeed(speed) {
         this.ROTATION_SPEED = speed;
+    }
+
+    setMouseFollow(enabled) {
+        this.mouseFollowEnabled = enabled;
     }
 
     destroy() {
@@ -645,5 +669,12 @@ function setPanoramaRotationSpeed(speed) {
     if (wallpaperEngine) wallpaperEngine._savedRotationSpeed = speed;
     if (wallpaperEngine && wallpaperEngine.renderer instanceof PanoramaRenderer) {
         wallpaperEngine.renderer.setRotationSpeed(speed);
+    }
+}
+
+function setPanoramaMouseFollow(enabled) {
+    if (wallpaperEngine) wallpaperEngine._savedMouseFollow = enabled;
+    if (wallpaperEngine && wallpaperEngine.renderer instanceof PanoramaRenderer) {
+        wallpaperEngine.renderer.setMouseFollow(enabled);
     }
 }
