@@ -5465,7 +5465,7 @@ function selectJavaForVersion(versionId, settings, versionJson = null, externalV
         _scanMcRuntime(mcRuntime, 5);
     }
 
-    const mcRuntimeRoaming = path.join(app.getPath('appData'), '.minecraft', 'runtime');
+    const mcRuntimeRoaming = path.join(process.env.APPDATA || '', '.minecraft', 'runtime');
     if (fs.existsSync(mcRuntimeRoaming)) {
         const _scanRoaming = (dir, depth) => {
             if (depth <= 0 || !fs.existsSync(dir)) return;
