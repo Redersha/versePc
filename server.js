@@ -5806,7 +5806,8 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
 
     const mainJarPath = findMainJar(versionJson, versionId, externalVersionDir);
     if (mainJarPath && fs.existsSync(mainJarPath)) {
-        if (versionJson.downloads?.client?.sha1) {
+        const isModdedVersion = !!(versionJson.forge || versionJson.neoforge || versionJson.fabricVersion || versionJson.inheritsFrom);
+        if (versionJson.downloads?.client?.sha1 && !isModdedVersion) {
             try {
                 const sha1 = await calculateSHA1(mainJarPath);
                 if (sha1 === versionJson.downloads.client.sha1) {
