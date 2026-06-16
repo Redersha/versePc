@@ -1403,10 +1403,20 @@ app.whenReady().then(async () => {
             callback({ responseHeaders });
         });
 
-        loadServerModule();
-
-        // 注册 versepc:// 协议处理器
-        protocol.handle('versepc', handleVersePCProtocol);
+        // 先注册协议处理器（静态文件服务不需要 server.js）
+        // server.js 延迟到窗口显示后加载，避免阻塞界面
+        let _serverReady = false;
+        protocol.handle('versepc', async (request) => {
+            if (!_serverReady) {
+                const reqUrl = new URL(request.url);
+                if (reqUrl.pathname.startsWith('/api/')) {
+                    return new Response(JSON.stringify({ error: 'Server loading...' }), {
+                        status: 503, headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+            }
+            return handleVersePCProtocol(request);
+        });
 
         protocol.handle('wpfile', (request) => {
             try {
@@ -1475,12 +1485,14 @@ app.whenReady().then(async () => {
 
         // 创建窗口（优先显示界面）
         createWindow();
-        if (serverModuleCache && serverModuleCache.setMainWindow) {
-            serverModuleCache.setMainWindow(mainWindow);
-        }
 
-        // 窗口显示后：启动 SSE 服务器、完整性检查、数据修复（全部异步，不阻塞界面）
+        // 窗口显示后：加载 server.js、启动 SSE、完整性检查等（全部异步）
         setImmediate(() => {
+            try { loadServerModule(); } catch (e) { console.error('[Server] Load failed:', e.message); }
+            _serverReady = true;
+            if (serverModuleCache && serverModuleCache.setMainWindow) {
+                try { serverModuleCache.setMainWindow(mainWindow); } catch (e) {}
+            }
             try {
                 const { createSSEServer } = require('./sse-server');
                 const sseResult = createSSEServer({ executeTool: sseExecuteTool });
