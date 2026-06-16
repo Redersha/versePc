@@ -1349,16 +1349,21 @@ async function ensureTerracottaInstalled() {
                     });
                 });
                 let extracted = null;
+                let extraDlls = [];
                 const findExe = (dir) => {
                     for (const f of fs.readdirSync(dir)) {
                         const fp = path.join(dir, f);
                         if (fs.statSync(fp).isDirectory()) { findExe(fp); }
-                        else if (f === exeName || f === 'terracotta' || f === 'terracotta.exe') { extracted = fp; }
+                        else if (f === exeName || f === 'terracotta' || f === 'terracotta.exe' || /^terracotta-[\d.]+.*\.exe$/i.test(f)) { extracted = fp; }
+                        else if (/\.dll$/i.test(f)) { extraDlls.push(fp); }
                     }
                 };
                 findExe(tmpDir);
                 if (extracted) {
                     fs.copyFileSync(extracted, binPath);
+                    for (const dll of extraDlls) {
+                        try { fs.copyFileSync(dll, path.join(binDir, path.basename(dll))); } catch (_) {}
+                    }
                     if (!isWin) fs.chmodSync(binPath, 0o755);
                     console.log(`[Terracotta] 解压安装成功 (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
                     fs.rmSync(tmpDir, { recursive: true, force: true });
