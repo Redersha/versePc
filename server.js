@@ -14162,6 +14162,34 @@ async function mergeForgeLoaderToVersion(versionId, gameVersion, forgeVersion) {
     }
 
     try { fs.unlinkSync(installerPath); } catch (e) {}
+
+    const ipPath = path.join(versionDir, 'install_profile.json');
+    if (fs.existsSync(ipPath)) {
+        try {
+            const ipData = JSON.parse(fs.readFileSync(ipPath, 'utf8'));
+            if (ipData.processors && ipData.processors.length > 0) {
+                console.log(`[Forge] 检测到 ${ipData.processors.length} 个处理器，开始执行...`);
+                try {
+                    const { execSync: _es } = require('child_process');
+                    const _scriptSrc = path.join(__dirname, 'forge-processor.js');
+                    const _scriptDst = path.join(DATA_DIR, 'temp', 'forge-processor.js');
+                    fs.mkdirSync(path.dirname(_scriptDst), { recursive: true });
+                    if (fs.existsSync(_scriptDst)) { try { fs.unlinkSync(_scriptDst); } catch(_) {} }
+                    const _srcContent = fs.readFileSync(_scriptSrc, 'utf8');
+                    fs.writeFileSync(_scriptDst, _srcContent, 'utf8');
+                    const _cmd = `node "${_scriptDst}" --root "${DATA_DIR}" --libs "${LIBRARIES_DIR}" --mcver "${gameVersion}" --forgever "${forgeVersion}"`;
+                    console.log(`[Forge] Running: ${_cmd}`);
+                    const _out = _es(_cmd, { timeout: 240000, encoding: 'utf8', maxBuffer: 10*1024*1024, windowsHide: true });
+                    console.log(`[Forge] Script output:\n${_out}`);
+                } catch (_procErr) {
+                    console.error(`[Forge] Script failed: ${_procErr.message}`);
+                }
+            }
+        } catch (e) {
+            console.warn(`[Forge] 读取 install_profile.json 失败: ${e.message}`);
+        }
+    }
+
     console.log(`[Forge] Loader merged into version: ${versionId}`);
 }
 

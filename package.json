@@ -39,6 +39,7 @@
                                 "main.js",
                                 "server.js",
                                 "neoforge-processor.js",
+                                "forge-processor.js",
                                 "sse-server.js",
                                 "agent-engine.js",
                                 "agent-worker.js",
