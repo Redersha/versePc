@@ -1504,10 +1504,11 @@ app.on('before-quit', async (event) => {
     if (serverModuleCache && serverModuleCache.cleanupOnShutdown) {
         try {
             console.log('[App] 正在清理下载任务...');
-            await serverModuleCache.cleanupOnShutdown();
+            const cleanupTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('清理超时')), 5000));
+            await Promise.race([serverModuleCache.cleanupOnShutdown(), cleanupTimeout]);
             console.log('[App] 下载任务清理完成');
         } catch (e) {
-            console.error('[App] 关闭清理失败:', e);
+            console.error('[App] 关闭清理失败:', e.message);
         }
     }
 });

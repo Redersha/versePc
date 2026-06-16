@@ -33,11 +33,12 @@
                   "productName":  "VersePC",
                   "icon":  "img/icon.png",
                   "directories":  {
-                                      "output":  "dist"
+                                      "output": "dist"
                                   },
                   "files":  [
                                 "main.js",
                                 "server.js",
+                                "neoforge-processor.js",
                                 "sse-server.js",
                                 "agent-engine.js",
                                 "agent-worker.js",
