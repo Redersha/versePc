@@ -16164,6 +16164,29 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         }
     }
 
+    if (isNewVersionDir && !fs.existsSync(path.join(versionDir, `${versionId}.json`))) {
+        console.log(`[mrpack] 重导入场景: 版本JSON缺失，重新创建 ${versionId}.json`);
+        const fallbackJson = {
+            id: versionId,
+            inheritsFrom: loaderVersionId || mcVersion || undefined,
+            type: 'release',
+            mainClass: 'net.minecraft.client.main.Main',
+            time: new Date().toISOString(),
+            releaseTime: new Date().toISOString()
+        };
+        try {
+            if (loaderVersionId) {
+                const lvP = path.join(VERSIONS_DIR, loaderVersionId, `${loaderVersionId}.json`);
+                if (fs.existsSync(lvP)) {
+                    const lvJ = JSON.parse(fs.readFileSync(lvP, 'utf-8'));
+                    if (lvJ.mainClass) fallbackJson.mainClass = lvJ.mainClass;
+                }
+            }
+        } catch (_e) {}
+        fs.writeFileSync(path.join(versionDir, `${versionId}.json`), JSON.stringify(fallbackJson, null, 2));
+        _invalidateResolvedJsonCache(versionId);
+    }
+
     let _backupDir = null;
     if (!isNewVersionDir) {
         try {
@@ -16727,6 +16750,10 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
         targetVersion: targetVersion || ''
     };
     fs.writeFileSync(path.join(versionDir, 'pack-info.json'), JSON.stringify(packInfo, null, 2));
+
+    if (_backupDir && fs.existsSync(_backupDir)) {
+        try { fs.rmSync(_backupDir, { recursive: true, force: true }); console.log(`[mrpack] 已清理备份目录: ${_backupDir}`); } catch (e) {}
+    }
 
     progress('done', `整合包 "${packName}" 导入完成！`, 100);
     if (failCount > 0) {
