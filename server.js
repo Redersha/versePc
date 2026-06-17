@@ -24319,7 +24319,20 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                 return;
                             }
 
-                            if (rdType === 'modpack' && (safeName.endsWith('.mrpack') || safeName.endsWith('.zip'))) {
+                            const safeNameLower = safeName.toLowerCase();
+                            const isModpackExt = safeNameLower.endsWith('.mrpack') || safeNameLower.endsWith('.zip');
+                            let isModpackByMagic = false;
+                            if (!isModpackExt && rdType === 'modpack' && fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
+                                try {
+                                    const fd = fs.openSync(destPath, 'r');
+                                    const buf = Buffer.alloc(4);
+                                    fs.readSync(fd, buf, 0, 4, 0);
+                                    fs.closeSync(fd);
+                                    if (buf[0] === 0x50 && buf[1] === 0x4B) { isModpackByMagic = true; console.log(`[Modpack] 文件扩展名 "${safeName}" 不匹配，但检测到 ZIP magic bytes，视为整合包`); }
+                                } catch (_mfErr) {}
+                            }
+                            console.log(`[Modpack] 扩展名检查: safeName="${safeName}" rdType="${rdType}" isModpackExt=${isModpackExt} isModpackByMagic=${isModpackByMagic}`);
+                            if (rdType === 'modpack' && (isModpackExt || isModpackByMagic)) {
                                 try {
                                     let verified = false;
                                     for (let verifyAttempt = 0; verifyAttempt < 3; verifyAttempt++) {
@@ -24459,6 +24472,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                     try { fs.unlinkSync(destPath); } catch (e) {}
                                 }
                             } else {
+                                console.warn(`[Modpack] ⚠ 未进入整合包导入流程! safeName="${safeName}" rdType="${rdType}" safeNameLower="${safeNameLower || safeName.toLowerCase()}"`);
                                 const session = modDownloadSessions.get(sessionId);
                                 if (session) { session.status = 'completed'; session.progress = 100; session.message = `${safeName} 下载完成！`; }
                             }
