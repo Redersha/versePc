@@ -24332,7 +24332,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                 } catch (_mfErr) {}
                             }
                             console.log(`[Modpack] 扩展名检查: safeName="${safeName}" rdType="${rdType}" isModpackExt=${isModpackExt} isModpackByMagic=${isModpackByMagic}`);
-                            if (rdType === 'modpack' && (isModpackExt || isModpackByMagic)) {
+                            if (rdType === 'modpack') {
                                 try {
                                     let verified = false;
                                     for (let verifyAttempt = 0; verifyAttempt < 3; verifyAttempt++) {
@@ -24472,43 +24472,9 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                                     try { fs.unlinkSync(destPath); } catch (e) {}
                                 }
                             } else {
-                                console.warn(`[Modpack] ⚠ 未进入整合包导入流程! safeName="${safeName}" rdType="${rdType}" isModpackExt=${isModpackExt} isModpackByMagic=${isModpackByMagic}`);
-                                if (rdType === 'modpack' && fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
-                                    console.log(`[Modpack] rdType=modpack 但扩展名不匹配，强制调用 importModpackFromPath`);
-                                    try {
-                                        const forcedImportResult = await importModpackFromPath(destPath, (p) => {
-                                            try {
-                                                const sf = modDownloadSessions.get(sessionId);
-                                                if (sf && sf.status !== 'cancelled') {
-                                                    sf.progress = 25 + Math.round((p.progress || 0) * 0.7);
-                                                    sf.message = p.message || '安装中...';
-                                                    sf.phase = p.stage || 'install';
-                                                    sf.currentFile = p.currentFile || '';
-                                                    if (p.files && p.files.length > 0) sf.files = p.files;
-                                                    if (p.stageHistory && p.stageHistory.length > 0) sf.stageHistory = p.stageHistory;
-                                                }
-                                            } catch (_) {}
-                                        }, rdType === 'modpack' ? rdCustomName : targetVersionId, abortController.signal);
-                                        const sf2 = modDownloadSessions.get(sessionId);
-                                        if (sf2 && sf2.status !== 'cancelled') {
-                                            if (forcedImportResult && forcedImportResult.success) {
-                                                sf2.status = 'completed'; sf2.progress = 100;
-                                                sf2.message = forcedImportResult.warning || `${safeName} 安装完成！`;
-                                            } else {
-                                                sf2.status = 'failed'; sf2.progress = 100;
-                                                sf2.message = (forcedImportResult && forcedImportResult.error) || '整合包导入失败';
-                                            }
-                                        }
-                                    } catch (forcedErr) {
-                                        console.error(`[Modpack] 强制导入异常:`, forcedErr.message);
-                                        const sf3 = modDownloadSessions.get(sessionId);
-                                        if (sf3) { sf3.status = 'failed'; sf3.progress = 100; sf3.message = `整合包导入异常: ${forcedErr.message}`; }
-                                    }
-                                } else {
-                                    const session = modDownloadSessions.get(sessionId);
-                                    if (session) { session.status = 'completed'; session.progress = 100; session.message = `${safeName} 下载完成！`; }
-                                }
-                                }
+                                const session = modDownloadSessions.get(sessionId);
+                                if (session) { session.status = 'completed'; session.progress = 100; session.message = `${safeName} 下载完成！`; }
+                            }
                             } catch (e) {
                             const session = modDownloadSessions.get(sessionId);
                             if (session) {
