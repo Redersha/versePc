@@ -92,3 +92,10 @@ forge-installer-wrapper/
 *preview*.html
 /.codex
 xmcl-source/
+constitution.js
+img/icon-original.png
+img/icon-fixed.png
+img/icon-new.png
+*报名*
+check-jars.js
+find-bad.js
