@@ -1418,7 +1418,9 @@ async function init() {
         cacheCommonElements();
 
         if (typeof initWallpaper === 'function') {
-            initWallpaper();
+            _lazyLoadScript('js/three.bundle.js').then(() => {
+                try { initWallpaper(); } catch (e) { console.error('[Wallpaper] init error:', e); }
+            }).catch(() => console.warn('[Wallpaper] THREE.js load failed'));
         }
 
         initWallpaperDropZone();
@@ -1431,87 +1433,78 @@ async function init() {
         _perfInit('AIChat.init');
 
         try {
-            const savedCustomImage = await window.electronAPI.store.get('versepc_custom_image');
-            if (savedCustomImage && typeof setCustomWallpaperImage === 'function') {
-                setCustomWallpaperImage(savedCustomImage);
-            }
-
-            const savedCustomVideo = await window.electronAPI.store.get('versepc_custom_video');
-            if (savedCustomVideo && typeof setCustomWallpaperVideo === 'function') {
-                setCustomWallpaperVideo(savedCustomVideo);
-            }
-        } catch (e) {
-            console.error('[Init] Load custom wallpaper error:', e);
-        }
-
-        try {
-            const savedWallpaper = await window.electronAPI.store.get('versepc_wallpaper');
-            if (savedWallpaper) {
-                let wpName = savedWallpaper;
-                if (wpName === 'starry') wpName = 'panorama';
-                const wpEl = document.querySelector(`.wallpaper-option[data-wallpaper="${wpName}"]`);
-                if (wpEl) selectWallpaper(wpEl);
-            }
-        } catch (e) {
-            console.error('[Init] Load wallpaper error:', e);
-        }
-
-        try {
-            const savedOpacity = await window.electronAPI.store.get('versepc_wallpaper_opacity');
-            if (savedOpacity != null) {
-                const slider = document.getElementById('wallpaper-opacity-slider');
-                if (slider) { slider.value = savedOpacity; onWallpaperOpacityChange(savedOpacity); }
-            }
-
-            const savedBlur = await window.electronAPI.store.get('versepc_wallpaper_blur');
-            if (savedBlur != null) {
-                const slider = document.getElementById('wallpaper-blur-slider');
-                if (slider) { slider.value = savedBlur; onWallpaperBlurChange(savedBlur); }
-            }
-
-            const savedFit = await window.electronAPI.store.get('versepc_wallpaper_fit');
-            if (savedFit) {
-                const select = document.getElementById('wallpaper-fit-select');
-                if (select) { select.value = savedFit; onWallpaperFitChange(savedFit); }
-            }
-
-            const savedPanoramaTheme = await window.electronAPI.store.get('versepc_panorama_theme');
-            if (savedPanoramaTheme) {
-                const themeEl = document.querySelector(`.panorama-theme-option[data-theme="${savedPanoramaTheme}"]`);
-                if (themeEl) selectPanoramaTheme(themeEl);
-            }
-
-            const savedPanoramaSpeed = await window.electronAPI?.store?.get('versepc_panorama_speed');
-            if (savedPanoramaSpeed) {
-                const slider = document.getElementById('panoramaSpeedSlider');
-                if (slider) slider.value = savedPanoramaSpeed;
-                const label = document.getElementById('panoramaSpeedLabel');
-                if (label) label.textContent = savedPanoramaSpeed;
-                if (typeof setPanoramaRotationSpeed === 'function') setPanoramaRotationSpeed(savedPanoramaSpeed * 0.001);
-            }
-
-            const savedMouseFollow = await window.electronAPI?.store?.get('versepc_panorama_mouse_follow');
-            if (savedMouseFollow === true) {
-                const toggle = document.getElementById('panoramaMouseFollowToggle');
-                if (toggle) toggle.checked = true;
-                if (typeof setPanoramaMouseFollow === 'function') setPanoramaMouseFollow(true);
-            }
-
-            const savedCustomImage = await window.electronAPI.store.get('versepc_custom_image');
-            if (savedCustomImage) {
-                const nameEl = document.getElementById('custom-wallpaper-file-name');
-                if (nameEl) nameEl.textContent = savedCustomImage.split(/[\\/]/).pop();
-                _updateCustomImagePreview(savedCustomImage);
-            }
-
-            const savedCustomVideo = await window.electronAPI.store.get('versepc_custom_video');
-            if (savedCustomVideo) {
-                const nameEl = document.getElementById('custom-wallpaper-file-name');
-                if (nameEl) nameEl.textContent = savedCustomVideo.split(/[\\/]/).pop();
-            }
-        } catch (e) {
-            console.error('[Init] Load wallpaper settings error:', e);
-        }
+            Promise.all([
+                window.electronAPI.store.get('versepc_custom_image'),
+                window.electronAPI.store.get('versepc_custom_video'),
+                window.electronAPI.store.get('versepc_wallpaper'),
+                window.electronAPI.store.get('versepc_wallpaper_opacity'),
+                window.electronAPI.store.get('versepc_wallpaper_blur'),
+                window.electronAPI.store.get('versepc_wallpaper_fit'),
+                window.electronAPI.store.get('versepc_panorama_theme'),
+                window.electronAPI?.store?.get('versepc_panorama_speed'),
+                window.electronAPI?.store?.get('versepc_panorama_mouse_follow'),
+            ]).then(([
+                savedCustomImage,
+                savedCustomVideo,
+                savedWallpaper,
+                savedOpacity,
+                savedBlur,
+                savedFit,
+                savedPanoramaTheme,
+                savedPanoramaSpeed,
+                savedMouseFollow,
+            ]) => {
+                if (savedCustomImage && typeof setCustomWallpaperImage === 'function') {
+                    setCustomWallpaperImage(savedCustomImage);
+                }
+                if (savedCustomVideo && typeof setCustomWallpaperVideo === 'function') {
+                    setCustomWallpaperVideo(savedCustomVideo);
+                }
+                if (savedWallpaper) {
+                    let wpName = savedWallpaper;
+                    if (wpName === 'starry') wpName = 'panorama';
+                    const wpEl = document.querySelector(`.wallpaper-option[data-wallpaper="${wpName}"]`);
+                    if (wpEl) selectWallpaper(wpEl);
+                }
+                if (savedOpacity != null) {
+                    const slider = document.getElementById('wallpaper-opacity-slider');
+                    if (slider) { slider.value = savedOpacity; onWallpaperOpacityChange(savedOpacity); }
+                }
+                if (savedBlur != null) {
+                    const slider = document.getElementById('wallpaper-blur-slider');
+                    if (slider) { slider.value = savedBlur; onWallpaperBlurChange(savedBlur); }
+                }
+                if (savedFit) {
+                    const select = document.getElementById('wallpaper-fit-select');
+                    if (select) { select.value = savedFit; onWallpaperFitChange(savedFit); }
+                }
+                if (savedPanoramaTheme) {
+                    const themeEl = document.querySelector(`.panorama-theme-option[data-theme="${savedPanoramaTheme}"]`);
+                    if (themeEl) selectPanoramaTheme(themeEl);
+                }
+                if (savedPanoramaSpeed) {
+                    const slider = document.getElementById('panoramaSpeedSlider');
+                    if (slider) slider.value = savedPanoramaSpeed;
+                    const label = document.getElementById('panoramaSpeedLabel');
+                    if (label) label.textContent = savedPanoramaSpeed;
+                    if (typeof setPanoramaRotationSpeed === 'function') setPanoramaRotationSpeed(savedPanoramaSpeed * 0.001);
+                }
+                if (savedMouseFollow === true) {
+                    const toggle = document.getElementById('panoramaMouseFollowToggle');
+                    if (toggle) toggle.checked = true;
+                    if (typeof setPanoramaMouseFollow === 'function') setPanoramaMouseFollow(true);
+                }
+                if (savedCustomImage) {
+                    const nameEl = document.getElementById('custom-wallpaper-file-name');
+                    if (nameEl) nameEl.textContent = savedCustomImage.split(/[\\/]/).pop();
+                    _updateCustomImagePreview(savedCustomImage);
+                }
+                if (savedCustomVideo) {
+                    const nameEl = document.getElementById('custom-wallpaper-file-name');
+                    if (nameEl) nameEl.textContent = savedCustomVideo.split(/[\\/]/).pop();
+                }
+            }).catch(e => console.error('[Init] Load wallpaper settings error:', e));
+        } catch (e) {}
     } catch (e) {
         console.error('Init critical error:', e);
         setProgress(100, '初始化完成');
@@ -6039,12 +6032,19 @@ async function terracottaStartHost() {
             showToast('请先启动游戏，然后在游戏内开放局域网联机', 'error');
             return;
         }
-        if (!gameStatus.lanPort) {
+        
+        let gamePort = gameStatus.lanPort;
+        if (!gamePort) {
+            const manualPort = parseInt(document.getElementById('terracotta-host-port').value, 10);
+            if (manualPort > 0 && manualPort < 65536) {
+                gamePort = manualPort;
+            }
+        }
+        if (!gamePort) {
             showToast('请在游戏内先开放局域网联机（按Esc → 对局域网开放）', 'error');
             return;
         }
         
-        const gamePort = gameStatus.lanPort;
         document.getElementById('terracotta-host-port').value = gamePort;
         
         const playerName = localStorage.getItem('cachedPlayerName') || 'Player';
@@ -7087,6 +7087,10 @@ async function initSkinViewer(skinUrl) {
     const container = document.getElementById('skin-3d-container');
     if (!container) return;
     try {
+        if (typeof skinview3d === 'undefined') {
+            container.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);font-size:14px;gap:8px;"><span style="font-size:24px;">⏳</span><span>正在加载皮肤查看器...</span></div>';
+            await _lazyLoadScript('js/skinview3d.bundle.js');
+        }
         let skinModel = (_currentDetailAccount?.skinModel === 'slim') ? 'slim' : 'default';
         if (skinUrl) {
             try {
@@ -8969,6 +8973,15 @@ function setupWindowControls() {
         window.electronAPI.close();
     });
 
+    if (window.electronAPI.onRequestCloseAnimate) {
+        window.electronAPI.onRequestCloseAnimate(() => {
+            const app = document.getElementById('app');
+            if (app && !app.classList.contains('app-closing')) {
+                app.classList.add('app-closing');
+            }
+        });
+    }
+
     window.electronAPI.onWindowStateChanged((data) => {
         isWindowMaximized = data.maximized;
         isWindowMode = !data.fullscreen;
@@ -10524,25 +10537,29 @@ function toggleMemoryMode() {
 function updateMemoryDisplay() {
     const slider = document.getElementById('memory-slider');
     const display = document.getElementById('memory-value-display');
-    const warning = document.getElementById('memory-warning');
+    const fill = document.getElementById('memory-slider-fill');
+    const usedMarker = document.getElementById('memory-used-marker');
+    const usedLabel = document.getElementById('memory-used-label');
     if (slider && display) {
         const mb = parseInt(slider.value, 10);
         const gb = (mb / 1024).toFixed(1);
         display.textContent = mb >= 1024 ? `${mb} MB (${gb} GB)` : `${mb} MB`;
-        if (warning && systemMemoryInfo) {
-            const totalMB = systemMemoryInfo.totalMB;
-            let warnMsg = '';
-            if (mb > totalMB * 0.85) {
-                warnMsg = '⚠ 分配内存接近系统总内存，可能导致系统卡顿！';
-            } else if (mb < 1024) {
-                warnMsg = '⚠ 内存分配过小，可能导致游戏卡顿';
-            }
-            if (warnMsg) {
-                warning.textContent = warnMsg;
-                warning.style.display = 'block';
-            } else {
-                warning.style.display = 'none';
-            }
+        if (fill) {
+            const max = parseInt(slider.max, 10) || 16384;
+            const min = parseInt(slider.min, 10) || 0;
+            const pct = Math.max(0, Math.min(100, ((mb - min) / (max - min)) * 100));
+            fill.style.width = pct + '%';
+        }
+        if (usedMarker && usedLabel && systemMemoryInfo) {
+            const usedMB = systemMemoryInfo.usedMB;
+            const min = parseInt(slider.min, 10) || 0;
+            const max = parseInt(slider.max, 10) || systemMemoryInfo.totalMB;
+            const usedPct = Math.max(0, Math.min(100, ((usedMB - min) / (max - min)) * 100));
+            usedMarker.style.left = usedPct + '%';
+            usedLabel.style.left = usedPct + '%';
+            usedMarker.style.display = 'block';
+            usedLabel.style.display = 'block';
+            usedLabel.textContent = `已用 ${(usedMB / 1024).toFixed(1)} GB`;
         }
     }
     updateAllocatedMemoryDisplay();
@@ -10837,6 +10854,16 @@ async function loadLaunchSettings() {
 
         updateSystemMemoryInfo();
         checkCdsStatus();
+        if (window._memMonitorTimer) clearInterval(window._memMonitorTimer);
+        window._memMonitorTimer = setInterval(() => {
+            const el = document.getElementById('sys-total-memory');
+            if (el && el.offsetParent !== null) {
+                updateSystemMemoryInfo();
+            } else {
+                clearInterval(window._memMonitorTimer);
+                window._memMonitorTimer = null;
+            }
+        }, 2000);
     } catch (e) {
         console.error('[Settings] Load launch settings error:', e);
     }

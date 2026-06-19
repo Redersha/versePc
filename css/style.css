@@ -3751,6 +3751,22 @@ body {
     }
 }
 
+@keyframes appOut {
+    from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-80px) scale(0.97);
+    }
+}
+
+#app.app-closing {
+    animation: appOut 0.35s cubic-bezier(0.4, 0, 1, 1) forwards !important;
+    pointer-events: none;
+}
+
 @keyframes toastIn {
     from { transform: translateY(-100%) scale(0.9); opacity: 0; }
     to { transform: translateY(0) scale(1); opacity: 1; }

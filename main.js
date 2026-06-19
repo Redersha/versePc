@@ -1,3 +1,29 @@
+// ============================================================================
+// 崩溃日志 - 必须在所有其他代码之前，捕获最早期的启动错误
+// ============================================================================
+const _crashLogPath = require('path').join(
+    process.env.APPDATA || require('path').join(require('os').homedir(), 'AppData', 'Roaming'),
+    'VersePC', 'crash.log'
+);
+function _writeCrashLog(message) {
+    try {
+        const _fs = require('fs');
+        const _dir = require('path').dirname(_crashLogPath);
+        if (!_fs.existsSync(_dir)) _fs.mkdirSync(_dir, { recursive: true });
+        _fs.appendFileSync(_crashLogPath, '[' + new Date().toISOString() + '] ' + message + '\n', 'utf8');
+    } catch (e) {}
+}
+_writeCrashLog('process started, pid=' + process.pid);
+process.on('uncaughtException', (err) => {
+    _writeCrashLog('uncaughtException: ' + (err && err.stack || err));
+});
+process.on('unhandledRejection', (reason) => {
+    _writeCrashLog('unhandledRejection: ' + (reason && reason.stack || reason));
+});
+process.on('exit', (code) => {
+    if (code !== 0) _writeCrashLog('process exited with code ' + code);
+});
+
 /**
  * VersePC - Minecraft Launcher
  * Copyright (c) 2026 豆杰. All Rights Reserved.
@@ -35,6 +61,45 @@
 // 参考 PCL2 SingleInstanceService 的设计：第二个实例立即退出，让第一个实例接管
 // ============================================================================
 const { app } = require('electron');
+
+try {
+    const { exec: _execAsync } = require('child_process');
+    const _currentPid = process.pid;
+    _execAsync('wmic process where "name=\'VersePC.exe\'" get ProcessId,ParentProcessId,CommandLine /format:csv 2>nul', { encoding: 'utf8', timeout: 5000, windowsHide: true }, (_err, _wmicOut) => {
+        try {
+            if (_wmicOut) {
+                for (const _line of _wmicOut.split('\n')) {
+                    const _trim = _line.trim();
+                    if (!_trim || _trim.startsWith('Node')) continue;
+                    const _parts = _trim.split(',');
+                    if (_parts.length < 4) continue;
+                    const _pid = parseInt(_parts[_parts.length - 2]);
+                    const _ppid = parseInt(_parts[_parts.length - 1]);
+                    if (!_pid || _pid === _currentPid) continue;
+                    if (_ppid && _ppid !== 0) continue;
+                    try { process.kill(_pid); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    });
+    _execAsync('netstat -ano | findstr LISTENING', { encoding: 'utf8', timeout: 5000, windowsHide: true }, (_err, _netOut) => {
+        try {
+            if (_netOut) {
+                for (let _port = 3001; _port <= 3010; _port++) {
+                    const _regex = new RegExp(`:${_port}\\s.*LISTENING\\s+(\\d+)`, 'g');
+                    let _match;
+                    while ((_match = _regex.exec(_netOut)) !== null) {
+                        const _pid = parseInt(_match[1]);
+                        if (_pid && _pid !== _currentPid) {
+                            try { process.kill(_pid); } catch (e) {}
+                        }
+                    }
+                }
+            }
+        } catch (e) {}
+    });
+} catch (e) {}
+
 const gotTheLockEarly = app.requestSingleInstanceLock();
 if (!gotTheLockEarly) {
     process.exit(0);
@@ -73,27 +138,25 @@ try {
 // 运行时完整性自检 - 延迟到窗口显示后执行，避免阻塞启动
 // ============================================================================
 let _integrityViolated = false;
-function _runIntegrityCheck() {
+async function _runIntegrityCheckAsync() {
     try {
         const _crypto = require('crypto');
         const _integrityPath = require('path').join(__dirname, 'integrity.json');
-        if (require('fs').existsSync(_integrityPath)) {
-            const _manifest = JSON.parse(require('fs').readFileSync(_integrityPath, 'utf-8'));
-            for (const [_file, _expectedHash] of Object.entries(_manifest)) {
-                try {
-                    const _filePath = require('path').join(__dirname, _file);
-                    if (!require('fs').existsSync(_filePath)) continue;
-                    const _content = require('fs').readFileSync(_filePath);
-                    const _actualHash = _crypto.createHash('sha256').update(_content).digest('hex');
-                    if (_actualHash !== _expectedHash) {
-                        _integrityViolated = true;
-                        console.warn(`[Integrity] File tampered: ${_file}`);
-                    }
-                } catch (e) {}
-            }
-            if (_integrityViolated) {
-                console.warn('[Integrity] Source file modification detected. This may indicate tampering.');
-            }
+        await require('fs').promises.access(_integrityPath);
+        const _manifest = JSON.parse(await require('fs').promises.readFile(_integrityPath, 'utf-8'));
+        for (const [_file, _expectedHash] of Object.entries(_manifest)) {
+            try {
+                const _filePath = require('path').join(__dirname, _file);
+                const _content = await require('fs').promises.readFile(_filePath);
+                const _actualHash = _crypto.createHash('sha256').update(_content).digest('hex');
+                if (_actualHash !== _expectedHash) {
+                    _integrityViolated = true;
+                    console.warn(`[Integrity] File tampered: ${_file}`);
+                }
+            } catch (e) {}
+        }
+        if (_integrityViolated) {
+            console.warn('[Integrity] Source file modification detected. This may indicate tampering.');
         }
     } catch (e) {}
 }
@@ -137,6 +200,7 @@ let mainWindow = null;            // 主窗口实例
 let apiHandler = null;            // server.js 的 API 处理函数引用
 let sseExecuteTool = null;         // SSE 服务器使用的工具执行函数引用
 let shuttingDown = false;         // 是否正在关闭应用
+let isClosingAnimation = false;   // 是否正在播放关闭动画
 let serverModuleCache = null;     // server.js 模块缓存
 let ssePort = 3001;
 let updateDownloaded = false;     // 更新是否已下载完成
@@ -157,40 +221,39 @@ let windowConfigCacheTime = 0;    // 缓存时间戳
 const CONFIG_CACHE_DURATION = 1000; // 缓存有效期（1秒）
 let savedWindowBounds = null;     // 保存的窗口边界（用于全屏恢复）
 
-function autoRepairJsonFile(filePath, backupSuffix) {
+async function autoRepairJsonFileAsync(filePath, backupSuffix) {
     try {
-        if (!fs.existsSync(filePath)) return false;
-        const content = fs.readFileSync(filePath, 'utf8');
+        await fs.promises.access(filePath);
+        const content = await fs.promises.readFile(filePath, 'utf8');
         JSON.parse(content);
         return true;
     } catch (e) {
         console.error(`[AutoRepair] Detected corrupted file: ${filePath}`);
         try {
             const backupPath = filePath + backupSuffix;
-            fs.copyFileSync(filePath, backupPath);
+            await fs.promises.copyFile(filePath, backupPath);
             console.log(`[AutoRepair] Backup created: ${backupPath}`);
         } catch (backupErr) {
             console.error(`[AutoRepair] Backup failed:`, backupErr.message);
         }
         const bakPath = filePath + '.bak';
         try {
-            if (fs.existsSync(bakPath)) {
-                const bakContent = fs.readFileSync(bakPath, 'utf8');
-                JSON.parse(bakContent);
-                fs.writeFileSync(filePath, bakContent);
-                console.log(`[AutoRepair] Recovered from .bak: ${bakPath}`);
-                return true;
-            }
+            await fs.promises.access(bakPath);
+            const bakContent = await fs.promises.readFile(bakPath, 'utf8');
+            JSON.parse(bakContent);
+            await fs.promises.writeFile(filePath, bakContent);
+            console.log(`[AutoRepair] Recovered from .bak: ${bakPath}`);
+            return true;
         } catch (bakErr) {
             console.error(`[AutoRepair] .bak recovery failed:`, bakErr.message);
         }
         try {
             const dir = path.dirname(filePath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            await fs.promises.mkdir(dir, { recursive: true });
             const defaultContent = filePath.includes('window-config')
                 ? JSON.stringify({ fullscreen: false, windowMode: true, windowWidth: 1200, windowHeight: 800 }, null, 2)
                 : '{}';
-            fs.writeFileSync(filePath, defaultContent);
+            await fs.promises.writeFile(filePath, defaultContent);
             console.log(`[AutoRepair] File reset to defaults: ${filePath}`);
         } catch (resetErr) {
             console.error(`[AutoRepair] Reset failed:`, resetErr.message);
@@ -199,30 +262,29 @@ function autoRepairJsonFile(filePath, backupSuffix) {
     }
 }
 
-function repairVersePCData() {
+async function repairVersePCDataAsync() {
     const dataDir = path.join(require('os').homedir(), '.versepc');
-    if (!fs.existsSync(dataDir)) return;
-    autoRepairJsonFile(CONFIG_PATH, '.corrupted.json');
-    autoRepairJsonFile(STORE_PATH, '.corrupted.json');
+    try { await fs.promises.access(dataDir); } catch { return; }
+    await autoRepairJsonFileAsync(CONFIG_PATH, '.corrupted.json');
+    await autoRepairJsonFileAsync(STORE_PATH, '.corrupted.json');
     try {
         const settingsFile = path.join(dataDir, 'settings.json');
-        if (fs.existsSync(settingsFile)) autoRepairJsonFile(settingsFile, '.corrupted.json');
+        await autoRepairJsonFileAsync(settingsFile, '.corrupted.json');
     } catch (e) {}
     try {
         const accountsFile = path.join(dataDir, 'accounts.json');
-        if (fs.existsSync(accountsFile)) autoRepairJsonFile(accountsFile, '.corrupted.json');
+        await autoRepairJsonFileAsync(accountsFile, '.corrupted.json');
     } catch (e) {}
     try {
         const versionsDir = path.join(dataDir, 'versions');
-        if (fs.existsSync(versionsDir)) {
-            const versions = fs.readdirSync(versionsDir);
-            for (const ver of versions) {
-                const verPath = path.join(versionsDir, ver);
-                const stat = fs.statSync(verPath);
-                if (stat.isDirectory()) {
-                    const versionJson = path.join(verPath, 'version.json');
-                    autoRepairJsonFile(versionJson, '.corrupted.json');
-                }
+        await fs.promises.access(versionsDir);
+        const versions = await fs.promises.readdir(versionsDir);
+        for (const ver of versions) {
+            const verPath = path.join(versionsDir, ver);
+            const stat = await fs.promises.stat(verPath);
+            if (stat.isDirectory()) {
+                const versionJson = path.join(verPath, 'version.json');
+                await autoRepairJsonFileAsync(versionJson, '.corrupted.json');
             }
         }
     } catch (e) {
@@ -233,7 +295,7 @@ function repairVersePCData() {
 
 function _deferredRepairData() {
     setImmediate(() => {
-        try { repairVersePCData(); } catch (e) {}
+        repairVersePCDataAsync().catch(() => {});
     });
 }
 
@@ -242,9 +304,11 @@ function _deferredRepairData() {
 // ============================================================================
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection:', reason);
+    _writeCrashLog('unhandledRejection (late): ' + (reason && reason.stack || reason));
 });
 process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err);
+    _writeCrashLog('uncaughtException (late): ' + (err && err.stack || err));
     if (!shuttingDown && mainWindow) {
         dialog.showErrorBox('发生错误', err.message || '未知错误');
     }
@@ -342,27 +406,34 @@ function saveWindowConfig(config) {
 // 窗口创建 - 创建无边框窗口并加载应用界面
 // ============================================================================
 
-function createWindow() {
-    const config = loadWindowConfig();
+async function createWindow() {
+    const [configResult, storeResult] = await Promise.allSettled([
+        Promise.resolve().then(() => loadWindowConfig()),
+        fs.promises.readFile(STORE_PATH, 'utf-8').then(raw => JSON.parse(raw)).catch(() => null)
+    ]);
+    const config = configResult.status === 'fulfilled' ? configResult.value : { fullscreen: false, windowMode: true, windowWidth: 1200, windowHeight: 800 };
+    const storeData = storeResult.status === 'fulfilled' ? storeResult.value : null;
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
 
     let bgColor = '#ffffff';
     try {
-        const storeRaw = fs.readFileSync(STORE_PATH, 'utf-8');
-        const storeData = JSON.parse(storeRaw);
-        console.log('[Window] store.json theme:', storeData.versepc_theme);
-        if (storeData.versepc_theme === 'dark') bgColor = '#0a0a0a';
-    } catch (e) {
-        console.log('[Window] Theme read failed:', e.message, 'STORE_PATH:', STORE_PATH);
-    }
+        if (storeData && storeData.versepc_theme === 'dark') bgColor = '#0a0a0a';
+    } catch (e) {}
     console.log('[Window] Final bgColor:', bgColor);
 
     const windowWidth = config.windowWidth || 1200;
     const windowHeight = config.windowHeight || 800;
     
-    const windowX = config.windowX !== undefined ? config.windowX : Math.floor((screenWidth - windowWidth) / 2);
-    const windowY = config.windowY !== undefined ? config.windowY : Math.floor((screenHeight - windowHeight) / 2);
+    let windowX = config.windowX !== undefined ? config.windowX : Math.floor((screenWidth - windowWidth) / 2);
+    let windowY = config.windowY !== undefined ? config.windowY : Math.floor((screenHeight - windowHeight) / 2);
+
+    const workArea = primaryDisplay.workArea;
+    if (windowX < workArea.x || windowX + windowWidth > workArea.x + workArea.width ||
+        windowY < workArea.y || windowY + windowHeight > workArea.y + workArea.height) {
+        windowX = Math.floor((screenWidth - windowWidth) / 2);
+        windowY = Math.floor((screenHeight - windowHeight) / 2);
+    }
 
     mainWindow = new BrowserWindow({
         width: windowWidth,
@@ -461,10 +532,19 @@ function createWindow() {
 
     // 窗口关闭时清理引用
     mainWindow.on('closed', () => {
+        isClosingAnimation = false;
         if (serverModuleCache && serverModuleCache.setMainWindow) {
             serverModuleCache.setMainWindow(null);
         }
         mainWindow = null;
+    });
+
+    // 拦截关闭事件，播放关闭动画（Alt+F4 等系统级关闭触发）
+    mainWindow.on('close', (e) => {
+        if (!isClosingAnimation && !shuttingDown && mainWindow && !mainWindow.isDestroyed()) {
+            e.preventDefault();
+            animateCloseWindow();
+        }
     });
 
     // 窗口大小改变时保存配置（非全屏、非最大化状态才保存）
@@ -623,8 +703,62 @@ ipcMain.on('window-maximize', () => {
     }
 });
 
+function animateCloseWindow() {
+    if (!mainWindow || mainWindow.isDestroyed() || isClosingAnimation) return;
+    isClosingAnimation = true;
+
+    try { mainWindow.webContents.send('request-close-animate'); } catch (e) {}
+
+    const doAnimate = () => {
+        if (!mainWindow || mainWindow.isDestroyed()) { isClosingAnimation = false; return; }
+
+        const bounds = mainWindow.getBounds();
+        const startY = bounds.y;
+        const targetY = startY - bounds.height - 60;
+        const duration = 400;
+        const startTime = Date.now();
+
+        const timer = setInterval(() => {
+            if (!mainWindow || mainWindow.isDestroyed()) { clearInterval(timer); return; }
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const eased = progress < 0.5
+                ? 4 * progress * progress * progress
+                : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+            try {
+                mainWindow.setBounds({
+                    x: bounds.x,
+                    y: Math.round(startY + (targetY - startY) * eased),
+                    width: bounds.width,
+                    height: bounds.height,
+                }, false);
+                mainWindow.setOpacity(1 - progress);
+            } catch (e) {}
+
+            if (progress >= 1) {
+                clearInterval(timer);
+                try { mainWindow.destroy(); } catch (e) {}
+            }
+        }, 20);
+    };
+
+    const wasMaximized = mainWindow.isMaximized();
+    const wasFullScreen = mainWindow.isFullScreen();
+
+    if (wasFullScreen) {
+        mainWindow.setFullScreen(false);
+    }
+    if (wasMaximized || wasFullScreen) {
+        mainWindow.unmaximize();
+        setTimeout(doAnimate, 200);
+    } else {
+        doAnimate();
+    }
+}
+
 ipcMain.on('window-close', () => {
-    if (mainWindow) mainWindow.close();
+    animateCloseWindow();
 });
 
 ipcMain.on('relaunch-app', () => {
@@ -1205,7 +1339,8 @@ ipcMain.handle('memory-optimize', async () => {
             resolve({ success: false, error: 'Script not found' });
             return;
         }
-        require('child_process').exec(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"`, { timeout: 30000 }, (err, stdout, stderr) => {
+        const { execFile } = require('child_process');
+        execFile('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { timeout: 30000 }, (err, stdout, stderr) => {
             if (err) {
                 resolve({ success: false, error: err.message });
                 return;
@@ -1347,7 +1482,7 @@ app.on('second-instance', () => {
         }
         mainWindow.moveTop();
     } else {
-        if (typeof createWindow === 'function') createWindow();
+        if (typeof createWindow === 'function') createWindow().catch(() => {});
     }
 });
 
@@ -1357,41 +1492,6 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
     try {
         console.log('VersePC starting...');
-
-        // 启动时异步清理残留旧进程和端口（不阻塞窗口创建）
-        if (process.platform === 'win32') {
-            const { exec } = require('child_process');
-            exec('wmic process where "name=\'VersePC.exe\'" get ProcessId,ParentProcessId,CommandLine /format:csv 2>nul', { encoding: 'utf8', timeout: 5000 }, (err, stdout) => {
-                if (err || !stdout) return;
-                try {
-                    const lines = stdout.split('\n').filter(l => l.trim() && !l.startsWith('Node'));
-                    for (const line of lines) {
-                        const parts = line.split(',');
-                        if (parts.length < 4) continue;
-                        const pid = parseInt(parts[parts.length - 2]);
-                        const ppid = parseInt(parts[parts.length - 1]);
-                        if (!pid || pid === process.pid) continue;
-                        if (ppid && ppid !== 0) continue;
-                        try { process.kill(pid); console.log('[App] Killed zombie process:', pid); } catch (e) {}
-                    }
-                } catch (e) {}
-            });
-            exec('netstat -ano | findstr LISTENING', { encoding: 'utf8', timeout: 5000 }, (err, stdout) => {
-                if (err || !stdout) return;
-                try {
-                    for (let port = 3001; port <= 3010; port++) {
-                        const regex = new RegExp(`:${port}\\s.*LISTENING\\s+(\\d+)`, 'g');
-                        let match;
-                        while ((match = regex.exec(stdout)) !== null) {
-                            const pid = parseInt(match[1]);
-                            if (pid && pid !== process.pid) {
-                                try { process.kill(pid); console.log('[App] Killed process on port', port, 'pid:', pid); } catch (e) {}
-                            }
-                        }
-                    }
-                } catch (e) {}
-            });
-        }
 
         // 只注册核心协议处理器，其余全部延迟
         let _serverReady = false;
@@ -1407,8 +1507,38 @@ app.whenReady().then(async () => {
             return handleVersePCProtocol(request);
         });
 
+        // 检查上次是否崩溃过，给用户一个提示
+        try {
+            if (require('fs').existsSync(_crashLogPath)) {
+                const _logContent = require('fs').readFileSync(_crashLogPath, 'utf8').trim();
+                if (_logContent) {
+                    const _lines = _logContent.split('\n');
+                    const _lastLine = _lines[_lines.length - 1] || '';
+                    const _timeMatch = _lastLine.match(/^\[(.+?)\]/);
+                    if (_timeMatch) {
+                        const _lastTime = new Date(_timeMatch[1]);
+                        const _ageMs = Date.now() - _lastTime.getTime();
+                        if (_ageMs < 24 * 60 * 60 * 1000) {
+                            setTimeout(() => {
+                                dialog.showMessageBox({
+                                    type: 'warning',
+                                    title: 'VersePC 上次启动异常',
+                                    message: 'VersePC 上次启动时遇到了问题',
+                                    detail: '可能的原因：\n• 缺少 VC++ 运行库（常见于新装系统）\n• 杀毒软件拦截了启动\n• 系统内存不足\n\n如果反复遇到此问题，请尝试：\n1. 安装 VC++ 运行库：https://aka.ms/vs/17/release/vc_redist.x64.exe\n2. 将 VersePC 加入杀毒软件白名单\n3. 以管理员身份运行',
+                                    buttons: ['我知道了']
+                                });
+                            }, 1500);
+                        }
+                    }
+                }
+            }
+        } catch (e) {}
+
         // 创建窗口（最优先）
-        createWindow();
+        await createWindow();
+
+        // 启动成功，清除崩溃日志
+        try { require('fs').writeFileSync(_crashLogPath, '', 'utf8'); } catch (e) {}
 
         // 窗口显示后再做一切非关键初始化
         setImmediate(() => {
@@ -1471,37 +1601,49 @@ app.whenReady().then(async () => {
             registerAIChatIPC();
             initAutoUpdater();
 
-            // 加载 server.js、启动 SSE、完整性检查等
-            try { loadServerModule(); } catch (e) { console.error('[Server] Load failed:', e.message); }
-            _serverReady = true;
-            if (serverModuleCache && serverModuleCache.setMainWindow) {
-                try { serverModuleCache.setMainWindow(mainWindow); } catch (e) {}
-            }
-            try {
-                const { createSSEServer } = require('./sse-server');
-                const sseResult = createSSEServer({ executeTool: sseExecuteTool });
-                global._sseServer = sseResult ? sseResult.server : null;
-                ssePort = sseResult ? sseResult.PORT : 3001;
-                console.log('[SSE] Server created: port=' + ssePort);
-            } catch (e) {
-                console.log('[SSE] Server failed: ' + e.message);
-            }
-            try { _runIntegrityCheck(); } catch (e) {}
-            try { _deferredRepairData(); } catch (e) {}
-            if (serverModuleCache) {
-                try { serverModuleCache.logStartupInfo(); } catch (e) {}
-            }
+            // 加载 server.js、启动 SSE、完整性检查等（延迟执行，不阻塞启动）
+            setImmediate(() => {
+                try { loadServerModule(); } catch (e) { console.error('[Server] Load failed:', e.message); }
+                _serverReady = true;
+                if (serverModuleCache && serverModuleCache.setMainWindow) {
+                    try { serverModuleCache.setMainWindow(mainWindow); } catch (e) {}
+                }
+                try {
+                    const { createSSEServer } = require('./sse-server');
+                    const sseResult = createSSEServer({ executeTool: sseExecuteTool });
+                    global._sseServer = sseResult ? sseResult.server : null;
+                    ssePort = sseResult ? sseResult.PORT : 3001;
+                    console.log('[SSE] Server created: port=' + ssePort);
+                } catch (e) {
+                    console.log('[SSE] Server failed: ' + e.message);
+                }
+                try { _runIntegrityCheckAsync().catch(() => {}); } catch (e) {}
+                try { _deferredRepairData(); } catch (e) {}
+                if (serverModuleCache) {
+                    try { serverModuleCache.logStartupInfo(); } catch (e) {}
+                }
+            });
         });
 
     } catch (e) {
         console.error('Failed to start:', e);
-        dialog.showErrorBox('VersePC 启动失败', e.message || '未知错误');
+        _writeCrashLog('app.whenReady failed: ' + (e && e.stack || e));
+        const _errMsg = String(e && e.message || e || '未知错误');
+        const _isModuleError = _errMsg.includes('Cannot find module') || _errMsg.includes('MODULE_NOT_FOUND');
+        const _isVCRuntime = _errMsg.includes('.dll') || _errMsg.includes('vcruntime') || _errMsg.includes('msvcp');
+        let _detail = _errMsg;
+        if (_isModuleError) {
+            _detail = '缺少必要文件：' + _errMsg + '\n\n请尝试重新安装 VersePC。';
+        } else if (_isVCRuntime) {
+            _detail = '缺少系统运行库（VC++ Redistributable）：' + _errMsg + '\n\n请安装 Visual C++ 运行库后重试。\n下载地址：https://aka.ms/vs/17/release/vc_redist.x64.exe';
+        }
+        dialog.showErrorBox('VersePC 启动失败', _detail + '\n\n崩溃日志已保存到：\n' + _crashLogPath);
         app.quit();
     }
 
     // macOS: 点击 Dock 图标时重新创建窗口
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+        if (BrowserWindow.getAllWindows().length === 0) createWindow().catch(() => {});
     });
 });
 
@@ -3195,13 +3337,59 @@ function registerAIChatIPC() {
             type: 'function',
             function: {
                 name: 'download_cfpa_pack',
-                description: '下载CFPA社区简体中文资源包。ALWAYS 在用户要求汉化时优先使用此工具（覆盖面广、质量高），NEVER 跳过此步骤直接AI翻译。支持指定游戏版本。',
+                description: '下载CFPA社区简体中文资源包。ALWAYS 在用户要求汉化时优先使用此工具（覆盖面广、质量高），NEVER 跳过此步骤直接AI翻译。支持指定游戏版本和加载器类型。支持Forge和Fabric版本。',
                 parameters: {
                     type: 'object',
                     properties: {
-                        mc_version: { type: 'string', description: 'Minecraft版本号，如"1.20.1"。不指定则自动检测当前版本' }
+                        mc_version: { type: 'string', description: 'Minecraft版本号，如"1.20.1"。不指定则自动检测当前版本' },
+                        loader_type: { type: 'string', description: '加载器类型，不指定则自动检测', enum: ['forge', 'fabric', 'auto'] }
                     },
                     required: []
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'extract_builtin_translations',
+                description: '从模组JAR文件中提取内置的中文翻译（zh_cn.json）。很多热门模组自带中文翻译，提取后可减少CFPA覆盖范围的依赖。ALWAYS 在下载CFPA资源包之前执行此步骤。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        mods_path: { type: 'string', description: 'mods文件夹路径。不指定则自动检测当前版本的mods目录' },
+                        target_lang: { type: 'string', description: '目标语言代码，默认zh_cn', enum: ['zh_cn', 'zh_tw'] }
+                    },
+                    required: []
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'download_modpack_translation',
+                description: '下载整合包专用汉化补丁（来自CFPA整合包汉化项目）。适用于整合包的配置文件、任务线、手册等内容的汉化。ALWAYS 在整合包安装完成后使用此工具。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        modpack_name: { type: 'string', description: '整合包名称，如"乌托邦探险之旅"、"All the Mods 9"等' },
+                        mc_version: { type: 'string', description: 'Minecraft版本号，如"1.20.1"' }
+                    },
+                    required: ['modpack_name']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'search_translation_dict',
+                description: '从MCMOD翻译词典中查询模组翻译条目。可用于查找特定英文词条的中文翻译，辅助AI翻译时保持术语一致性。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        keyword: { type: 'string', description: '要查询的英文或中文关键词' },
+                        source: { type: 'string', description: '词典来源', enum: ['mcmod', 'vmct', 'auto'] }
+                    },
+                    required: ['keyword']
                 }
             }
         },
@@ -3431,9 +3619,44 @@ function registerAIChatIPC() {
                         success: parsed.success,
                         version: parsed.version,
                         mcVersion: parsed.mcVersion,
+                        loaderType: parsed.loaderType,
+                        path: parsed.path,
+                        size: parsed.size,
+                        source: parsed.source,
+                        message: parsed.message,
+                        error: parsed.error
+                    });
+                }
+                case 'extract_builtin_translations': {
+                    return JSON.stringify({
+                        success: parsed.success,
+                        modsPath: parsed.modsPath,
+                        targetLang: parsed.targetLang,
+                        totalMods: parsed.totalMods,
+                        modsExtracted: parsed.modsExtracted,
+                        totalEntries: parsed.totalEntries,
+                        outputDir: parsed.outputDir,
+                        details: (parsed.details || []).slice(0, 20).map(d => ({ namespace: d.namespace, entries: d.entries }))
+                    });
+                }
+                case 'download_modpack_translation': {
+                    return JSON.stringify({
+                        success: parsed.success,
+                        modpackName: parsed.modpackName,
+                        mcVersion: parsed.mcVersion,
                         path: parsed.path,
                         size: parsed.size,
                         message: parsed.message,
+                        error: parsed.error
+                    });
+                }
+                case 'search_translation_dict': {
+                    return JSON.stringify({
+                        success: parsed.success,
+                        keyword: parsed.keyword,
+                        source: parsed.source,
+                        results: (parsed.results || []).slice(0, 30),
+                        totalResults: parsed.totalResults,
                         error: parsed.error
                     });
                 }
@@ -3521,7 +3744,7 @@ function registerAIChatIPC() {
                 clearTimeout(timeoutId);
                 const result = normalizeToolResult(name, summarizeToolResult(name, rawResult));
 
-                const noCacheTools = ['install_mod', 'install_version', 'install_loader', 'install_modpack', 'launch_game', 'stop_game', 'toggle_mod', 'manage_settings', 'execute_command', 'write_file', 'edit_file', 'translate_mod', 'download_cfpa_pack', 'explore_environment', 'select_version'];
+                const noCacheTools = ['install_mod', 'install_version', 'install_loader', 'install_modpack', 'launch_game', 'stop_game', 'toggle_mod', 'manage_settings', 'execute_command', 'write_file', 'edit_file', 'translate_mod', 'download_cfpa_pack', 'extract_builtin_translations', 'download_modpack_translation', 'search_translation_dict', 'explore_environment', 'select_version'];
                 if (!noCacheTools.includes(name)) {
                     toolResultCache.set(cacheKey, { result, time: Date.now() });
                     if (toolResultCache.size > 30) {
@@ -5261,6 +5484,7 @@ ${JSON.stringify(toTranslate, null, 2)}`;
                     const https = require('https');
                     const http = require('http');
                     let mcVersion = args.mc_version;
+                    let loaderType = args.loader_type || 'auto';
 
                     if (!mcVersion) {
                         try {
@@ -5271,9 +5495,24 @@ ${JSON.stringify(toTranslate, null, 2)}`;
                     }
                     if (!mcVersion) return JSON.stringify({ error: '无法确定游戏版本，请指定mc_version参数' });
 
+                    if (loaderType === 'auto') {
+                        try {
+                            const ctxResult = await executeToolInner('get_current_context', {});
+                            const ctxParsed = JSON.parse(ctxResult);
+                            const verDir = ctxParsed.versionDir || '';
+                            if (verDir) {
+                                const fsSync = require('fs');
+                                if (fsSync.existsSync(path.join(verDir, 'fabric-server-launcher.properties')) || fsSync.existsSync(path.join(verDir, 'fabric'))) {
+                                    loaderType = 'fabric';
+                                }
+                            }
+                        } catch (e) {}
+                        if (loaderType === 'auto') loaderType = 'forge';
+                    }
+
                     const versionMap = {
-                        '1.21': '1.21', '1.21.1': '1.21', '1.21.2': '1.21', '1.21.3': '1.21',
-                        '1.20': '1.20', '1.20.1': '1.20', '1.20.2': '1.20', '1.20.3': '1.20', '1.20.4': '1.20',
+                        '1.21': '1.21', '1.21.1': '1.21', '1.21.2': '1.21', '1.21.3': '1.21', '1.21.4': '1.21',
+                        '1.20': '1.20', '1.20.1': '1.20', '1.20.2': '1.20', '1.20.3': '1.20', '1.20.4': '1.20', '1.20.5': '1.20', '1.20.6': '1.20',
                         '1.19': '1.19', '1.19.1': '1.19', '1.19.2': '1.19', '1.19.3': '1.19', '1.19.4': '1.19',
                         '1.18': '1.18', '1.18.1': '1.18', '1.18.2': '1.18',
                         '1.16': '1.16', '1.16.1': '1.16', '1.16.2': '1.16', '1.16.3': '1.16', '1.16.4': '1.16', '1.16.5': '1.16',
@@ -5282,45 +5521,330 @@ ${JSON.stringify(toTranslate, null, 2)}`;
                     const cfpaVersion = versionMap[mcVersion];
                     if (!cfpaVersion) return JSON.stringify({ error: `不支持的游戏版本: ${mcVersion}，CFPA资源包支持 1.12.2/1.16/1.18/1.19/1.20/1.21` });
 
+                    const fabricVersions = ['1.16', '1.18', '1.19', '1.20', '1.21'];
+                    const useFabric = loaderType === 'fabric' && fabricVersions.includes(cfpaVersion);
+
                     const outputDir = path.join(os.homedir(), '.versepc', 'resourcepacks');
                     await fs.promises.mkdir(outputDir, { recursive: true });
-                    const outputPath = path.join(outputDir, `CFPA-${cfpaVersion}-zh_cn.zip`);
+                    const suffix = useFabric ? '-Fabric' : '';
+                    const outputPath = path.join(outputDir, `CFPA-${cfpaVersion}${suffix}-zh_cn.zip`);
 
-                    const downloadUrl = `https://cdn.jsdelivr.net/gh/CFPAOrg/Minecraft-Mod-Language-Package@${cfpaVersion}-pack/Minecraft-Mod-Language-Package.zip`;
+                    function cfpaOfficialUrls(ver, fabric) {
+                        const base = 'http://downloader1.meitangdehulu.com:22943';
+                        const f = fabric ? '-Fabric' : '';
+                        if (ver === '1.12.2') return [`${base}/Minecraft-Mod-Language-Modpack.zip`];
+                        if (ver === '1.10.2') return [`${base}/Minecraft-Mod-Language-Modpack-1-10-2.zip`];
+                        return [`${base}/Minecraft-Mod-Language-Modpack-${ver.replace(/\./g, '-')}${f}.zip`];
+                    }
 
-                    try {
-                        const fileData = await new Promise((resolve, reject) => {
-                            const timeout = setTimeout(() => reject(new Error('下载超时')), 60000);
-                            const client = downloadUrl.startsWith('https') ? https : http;
-                            const doDownload = (url, redirects) => {
+                    const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/CFPAOrg/Minecraft-Mod-Language-Package@${cfpaVersion}-pack/Minecraft-Mod-Language-Package.zip`;
+                    const officialUrls = cfpaOfficialUrls(cfpaVersion, useFabric);
+                    const allUrls = [...officialUrls, jsdelivrUrl];
+
+                    async function downloadWithRedirects(url) {
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('下载超时')), 120000);
+                            const client = url.startsWith('https') ? https : http;
+                            const doDownload = (dlUrl, redirects) => {
                                 if (redirects > 5) { clearTimeout(timeout); reject(new Error('重定向过多')); return; }
-                                client.get(url, { headers: { 'User-Agent': 'VersePC/1.0' } }, (res) => {
+                                client.get(dlUrl, { headers: { 'User-Agent': 'VersePC/1.0' } }, (res) => {
                                     if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                                        clearTimeout(timeout);
                                         doDownload(res.headers.location, (redirects || 0) + 1);
                                         return;
                                     }
+                                    if (res.statusCode !== 200) { clearTimeout(timeout); reject(new Error(`HTTP ${res.statusCode}`)); return; }
                                     const chunks = [];
                                     res.on('data', chunk => chunks.push(chunk));
                                     res.on('end', () => { clearTimeout(timeout); resolve(Buffer.concat(chunks)); });
                                     res.on('error', (e) => { clearTimeout(timeout); reject(e); });
                                 }).on('error', (e) => { clearTimeout(timeout); reject(e); });
                             };
-                            doDownload(downloadUrl, 0);
+                            doDownload(url, 0);
                         });
+                    }
 
+                    let fileData = null;
+                    let usedSource = '';
+                    for (const url of allUrls) {
+                        try {
+                            fileData = await downloadWithRedirects(url);
+                            usedSource = url.includes('meitangdehulu') ? 'cfpa_official' : 'jsdelivr';
+                            if (fileData && fileData.length > 1024) break;
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+
+                    if (!fileData || fileData.length < 1024) {
+                        return JSON.stringify({ error: '所有下载源均失败，请检查网络连接后重试' });
+                    }
+
+                    try {
                         await fs.promises.writeFile(outputPath, fileData);
                         return JSON.stringify({
                             success: true,
                             version: cfpaVersion,
                             mcVersion,
+                            loaderType,
                             path: outputPath,
                             size: Math.round(fileData.length / 1024) + 'KB',
-                            message: `CFPA ${cfpaVersion} 简体中文资源包已下载到 ${outputPath}，可在游戏设置中启用此资源包`
+                            source: usedSource,
+                            message: `CFPA ${cfpaVersion}${useFabric ? ' (Fabric)' : ''} 简体中文资源包已下载到 ${outputPath}，可在游戏设置中启用此资源包`
                         });
                     } catch (e) {
-                        return JSON.stringify({ error: `下载CFPA资源包失败: ${e.message}` });
+                        return JSON.stringify({ error: `保存CFPA资源包失败: ${e.message}` });
                     }
+                }
+                case 'extract_builtin_translations': {
+                    const fs = require('fs');
+                    const os = require('os');
+                    const AdmZip = require('adm-zip');
+                    const targetLang = args.target_lang || 'zh_cn';
+                    let modsPath = args.mods_path;
+
+                    if (!modsPath) {
+                        try {
+                            const ctxResult = await executeToolInner('get_current_context', {});
+                            const ctxParsed = JSON.parse(ctxResult);
+                            const gameDir = ctxParsed.gameDir || '';
+                            if (gameDir) modsPath = path.join(gameDir, 'mods');
+                        } catch (e) {}
+                    }
+                    if (!modsPath || !fs.existsSync(modsPath)) {
+                        return JSON.stringify({ error: 'mods目录不存在，请指定mods_path参数' });
+                    }
+
+                    const outputDir = path.join(os.homedir(), '.versepc', 'translations', 'extracted', targetLang);
+                    await fs.promises.mkdir(outputDir, { recursive: true });
+
+                    let files;
+                    try {
+                        files = (await fs.promises.readdir(modsPath)).filter(f => f.toLowerCase().endsWith('.jar'));
+                    } catch (e) {
+                        return JSON.stringify({ error: `无法读取mods目录: ${e.message}` });
+                    }
+
+                    const details = [];
+                    let modsExtracted = 0;
+                    let totalEntries = 0;
+
+                    for (const jarFile of files) {
+                        try {
+                            const jarPath = path.join(modsPath, jarFile);
+                            const zip = new AdmZip(jarPath);
+                            const entries = zip.getEntries();
+                            const langPattern = new RegExp(`assets/([^/]+)/lang/${targetLang}\\.json$`, 'i');
+
+                            for (const entry of entries) {
+                                const match = entry.entryName.match(langPattern);
+                                if (match) {
+                                    const namespace = match[1];
+                                    try {
+                                        const content = entry.getData().toString('utf-8');
+                                        const parsed = JSON.parse(content);
+                                        const entryCount = Object.keys(parsed).length;
+                                        if (entryCount > 0) {
+                                            const nsDir = path.join(outputDir, 'assets', namespace, 'lang');
+                                            await fs.promises.mkdir(nsDir, { recursive: true });
+                                            const outputPath = path.join(nsDir, `${targetLang}.json`);
+
+                                            let existing = {};
+                                            try {
+                                                const existingContent = await fs.promises.readFile(outputPath, 'utf-8');
+                                                existing = JSON.parse(existingContent);
+                                            } catch (e) {}
+
+                                            const merged = { ...existing, ...parsed };
+                                            await fs.promises.writeFile(outputPath, JSON.stringify(merged, null, 2), 'utf-8');
+
+                                            details.push({ namespace, mod: jarFile, entries: entryCount });
+                                            modsExtracted++;
+                                            totalEntries += entryCount;
+                                        }
+                                    } catch (e) {}
+                                }
+                            }
+                        } catch (e) {}
+                    }
+
+                    return JSON.stringify({
+                        success: true,
+                        modsPath,
+                        targetLang,
+                        totalMods: files.length,
+                        modsExtracted,
+                        totalEntries,
+                        outputDir,
+                        details
+                    });
+                }
+                case 'download_modpack_translation': {
+                    const fs = require('fs');
+                    const os = require('os');
+                    const https = require('https');
+                    const http = require('http');
+                    const modpackName = args.modpack_name;
+                    let mcVersion = args.mc_version;
+
+                    if (!mcVersion) {
+                        try {
+                            const ctxResult = await executeToolInner('get_current_context', {});
+                            const ctxParsed = JSON.parse(ctxResult);
+                            mcVersion = ctxParsed.selectedVersion || '';
+                        } catch (e) {}
+                    }
+
+                    const outputDir = path.join(os.homedir(), '.versepc', 'translations', 'modpack');
+                    await fs.promises.mkdir(outputDir, { recursive: true });
+
+                    async function downloadUrl(url) {
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('下载超时')), 120000);
+                            const client = url.startsWith('https') ? https : http;
+                            const doDownload = (dlUrl, redirects) => {
+                                if (redirects > 5) { clearTimeout(timeout); reject(new Error('重定向过多')); return; }
+                                client.get(dlUrl, { headers: { 'User-Agent': 'VersePC/1.0' } }, (res) => {
+                                    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                                        doDownload(res.headers.location, (redirects || 0) + 1);
+                                        return;
+                                    }
+                                    if (res.statusCode !== 200) { clearTimeout(timeout); reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                                    const chunks = [];
+                                    res.on('data', chunk => chunks.push(chunk));
+                                    res.on('end', () => { clearTimeout(timeout); resolve(Buffer.concat(chunks)); });
+                                    res.on('error', (e) => { clearTimeout(timeout); reject(e); });
+                                }).on('error', (e) => { clearTimeout(timeout); reject(e); });
+                            };
+                            doDownload(url, 0);
+                        });
+                    }
+
+                    const searchUrl = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(modpackName)}&facets=[["project_type:modpack"]]&limit=5`;
+
+                    try {
+                        const searchData = await downloadUrl(searchUrl);
+                        const searchResult = JSON.parse(searchData.toString('utf-8'));
+                        const hits = searchResult.hits || [];
+
+                        if (hits.length === 0) {
+                            return JSON.stringify({ error: `未找到名为"${modpackName}"的整合包`, modpackName });
+                        }
+
+                        const bestMatch = hits[0];
+                        const slug = bestMatch.slug;
+                        const safeName = slug || modpackName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+                        const cfpaModpackUrl = `https://modpack.cfpa.team/zh_CN/${safeName}.zip`;
+                        const outputPath = path.join(outputDir, `${safeName}-translation.zip`);
+
+                        let fileData = null;
+                        try {
+                            fileData = await downloadUrl(cfpaModpackUrl);
+                        } catch (e) {
+                            return JSON.stringify({
+                                success: false,
+                                modpackName,
+                                mcVersion,
+                                error: `CFPA暂未收录"${modpackName}"的整合包汉化补丁（Modrinth ID: ${bestMatch.project_id}）。你可以在 modpack.cfpa.team 查看已收录的整合包列表。`,
+                                modrinthId: bestMatch.project_id,
+                                suggestion: '该整合包的模组汉化可使用 CFPA社区资源包 + AI翻译 的组合方案'
+                            });
+                        }
+
+                        if (!fileData || fileData.length < 1024) {
+                            return JSON.stringify({
+                                success: false,
+                                modpackName,
+                                mcVersion,
+                                error: `下载的文件异常（${fileData ? fileData.length : 0}字节），CFPA可能尚未收录此整合包的汉化补丁`
+                            });
+                        }
+
+                        await fs.promises.writeFile(outputPath, fileData);
+                        return JSON.stringify({
+                            success: true,
+                            modpackName: bestMatch.title || modpackName,
+                            mcVersion,
+                            path: outputPath,
+                            size: Math.round(fileData.length / 1024) + 'KB',
+                            message: `整合包"${bestMatch.title || modpackName}"的汉化补丁已下载到 ${outputPath}，请解压到游戏主目录（.minecraft文件夹）`
+                        });
+                    } catch (e) {
+                        return JSON.stringify({ error: `下载整合包汉化补丁失败: ${e.message}`, modpackName });
+                    }
+                }
+                case 'search_translation_dict': {
+                    const https = require('https');
+                    const http = require('http');
+                    const keyword = args.keyword;
+                    const source = args.source || 'auto';
+
+                    async function fetchUrl(url) {
+                        return new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('请求超时')), 15000);
+                            const client = url.startsWith('https') ? https : http;
+                            client.get(url, { headers: { 'User-Agent': 'VersePC/1.0', 'Accept': 'application/json' } }, (res) => {
+                                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                                    fetchUrl(res.headers.location).then(resolve).catch(reject);
+                                    return;
+                                }
+                                const chunks = [];
+                                res.on('data', chunk => chunks.push(chunk));
+                                res.on('end', () => { clearTimeout(timeout); resolve(Buffer.concat(chunks).toString('utf-8')); });
+                                res.on('error', (e) => { clearTimeout(timeout); reject(e); });
+                            }).on('error', (e) => { clearTimeout(timeout); reject(e); });
+                        });
+                    }
+
+                    const results = [];
+                    let usedSource = source;
+
+                    if (source === 'auto' || source === 'vmct') {
+                        try {
+                            const vmctUrl = `https://dict.vmct-cn.top/api/search?q=${encodeURIComponent(keyword)}&limit=20`;
+                            const vmctData = await fetchUrl(vmctUrl);
+                            const vmctResult = JSON.parse(vmctData);
+                            if (vmctResult.data && vmctResult.data.length > 0) {
+                                for (const item of vmctResult.data.slice(0, 20)) {
+                                    results.push({
+                                        en: item.key || item.en || '',
+                                        zh: item.value || item.zh || '',
+                                        mod: item.mod || item.namespace || '',
+                                        source: 'vmct'
+                                    });
+                                }
+                                usedSource = 'vmct';
+                            }
+                        } catch (e) {}
+                    }
+
+                    if (results.length === 0 && (source === 'auto' || source === 'mcmod')) {
+                        try {
+                            const mcmodUrl = `https://api.mcmod.cn/getTranslation?keyword=${encodeURIComponent(keyword)}`;
+                            const mcmodData = await fetchUrl(mcmodUrl);
+                            const mcmodResult = JSON.parse(mcmodData);
+                            if (mcmodResult.results && mcmodResult.results.length > 0) {
+                                for (const item of mcmodResult.results.slice(0, 20)) {
+                                    results.push({
+                                        en: item.key || item.en || '',
+                                        zh: item.value || item.zh || '',
+                                        mod: item.mod || '',
+                                        source: 'mcmod'
+                                    });
+                                }
+                                usedSource = 'mcmod';
+                            }
+                        } catch (e) {}
+                    }
+
+                    return JSON.stringify({
+                        success: results.length > 0,
+                        keyword,
+                        source: usedSource,
+                        results,
+                        totalResults: results.length,
+                        error: results.length === 0 ? `未找到"${keyword}"的翻译条目` : undefined
+                    });
                 }
                 case 'explore_environment': {
                     const includeMods = args.include_mods !== false;

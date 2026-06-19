@@ -332,21 +332,21 @@ const API = {
         return result && result.versions ? result.versions : (Array.isArray(result) ? result : []);
     },
     installFabric: (gameVersion, loaderVersion = '') =>
-        apiPost('/api/fabric/install', { gameVersion, loaderVersion }),
+        apiPost('/api/fabric/install', { gameVersion, loaderVersion }, 120000),
     getForgeVersions: async (game) => {
         const result = await apiGet('/api/forge/versions', { game });
         return result && result.versions ? result.versions : (Array.isArray(result) ? result : []);
     },
     installForge: (gameVersion, forgeVersion) =>
-        apiPost('/api/forge/install', { gameVersion, forgeVersion }),
+        apiPost('/api/forge/install', { gameVersion, forgeVersion }, 300000),
     installNeoForge: (gameVersion, neoVersion) =>
-        apiPost('/api/neoforge/install', { gameVersion, neoVersion }),
+        apiPost('/api/neoforge/install', { gameVersion, neoVersion }, 300000),
     getOptiFineVersions: async (game) => {
         const result = await apiGet('/api/optifine/versions', { game });
         return result && result.versions ? result.versions : (Array.isArray(result) ? result : []);
     },
     installOptiFine: (gameVersion, optifineType) =>
-        apiPost('/api/optifine/install', { gameVersion, optifineType }),
+        apiPost('/api/optifine/install', { gameVersion, optifineType }, 120000),
 
     // === 游戏启动与生命周期 ===
     launchGame: (versionId, options) => apiPost('/api/launch', { versionId, ...(options || {}) }),

@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     minimize: () => ipcRenderer.send('window-minimize'),
     maximize: () => ipcRenderer.send('window-maximize'),
     close: () => ipcRenderer.send('window-close'),
+    onRequestCloseAnimate: (callback) => ipcRenderer.on('request-close-animate', () => callback()),
     isMaximized: () => ipcRenderer.invoke('window-is-maximized'),
     isFullscreen: () => ipcRenderer.invoke('window-is-fullscreen'),
     setFullscreen: (fullscreen) => ipcRenderer.send('window-set-fullscreen', fullscreen),
