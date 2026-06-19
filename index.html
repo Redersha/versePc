@@ -292,7 +292,7 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.642 8.5c-.674-1.866-2.342-3.5-4.642-3.5-2.298 0-4.284 1.5-5.142 3.5"/><path d="M12 3v2"/><path d="M8 8l-2-2"/><path d="M16 8l2-2"/><circle cx="12" cy="13" r="4"/><path d="M12 17v4"/><path d="M8 21h8"/></svg>
                         <span>Java</span>
                     </button>
-                    <button class="nav-btn nav-btn-experimental" data-page="explore" title="实验性">
+                    <button class="nav-btn nav-btn-experimental" data-page="explore" title="实验性" id="nav-explore-btn">
                         <span class="nav-btn-experimental-badge">实验</span>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
                         <span>实验性</span>
@@ -1489,7 +1489,24 @@
                 </div>
 
                 <div id="page-explore" class="page">
-                    <div class="rc-chat-container">
+                    <div id="explore-placeholder" style="display:none">
+                        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;">
+                            <h2 style="color:var(--text-primary);margin:0 0 12px;font-size:24px;font-weight:600;">实验性功能开发中</h2>
+                            <p style="color:var(--text-secondary);margin:0 0 8px;font-size:15px;line-height:1.6;max-width:400px;">
+                                AI助手功能正在紧张开发中，目前仅对测试版用户开放体验。
+                            </p>
+                            <p style="color:var(--text-secondary);margin:0 0 32px;font-size:14px;line-height:1.6;max-width:400px;">
+                                如果你想抢先体验，请通过爱发电赞助获取测试版资格！
+                            </p>
+                            <a href="https://ifdian.net/a/versejava" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px;padding:14px 32px;background:linear-gradient(135deg,#ff6b6b 0%,#ee5a24 100%);color:white;text-decoration:none;border-radius:12px;font-size:16px;font-weight:600;transition:all 0.3s ease;box-shadow:0 4px 15px rgba(238,90,36,0.3);" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 20px rgba(238,90,36,0.4)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 4px 15px rgba(238,90,36,0.3)'">
+                                前往爱发电赞助
+                            </a>
+                            <p style="color:var(--text-tertiary);margin:24px 0 0;font-size:12px;">
+                                赞助后即可获得测试版下载资格，抢先体验AI助手的强大功能
+                            </p>
+                        </div>
+                    </div>
+                    <div class="rc-chat-container" id="explore-chat-container">
                         <div class="ai-sidebar-overlay" id="ai-sidebar-overlay" onclick="AIChat.toggleSidebar()"></div>
                         <div class="rc-chat-sidebar ai-chat-sidebar" id="ai-chat-sidebar">
                             <div class="ai-sidebar-nav">
@@ -3124,6 +3141,13 @@
                                     </div>
                                     <button class="btn btn-primary win-only" id="memory-optimize-btn" onclick="doMemoryOptimize()">内存优化</button>
                                 </div>
+                            </div>
+                            <div class="form-group" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="auto-memory-optimize" checked>
+                                    <span>启动游戏前优化一次</span>
+                                </label>
+                                <span class="form-hint">每次启动游戏前自动清理系统待机内存和所有进程的工作集，释放约 1/3 物理内存</span>
                             </div>
                         </div>
 

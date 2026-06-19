@@ -997,8 +997,9 @@ ipcMain.handle('activate-verify', async (event, code) => {
     try {
         const crypto = require('crypto');
         const os = require('os');
-        const SECRET = 'VersePC$ecureK3y#2026@Activation!Gen';
-        const HASH_LEN = 12;
+        let activationModule;
+        try { activationModule = require('./activation.obfuscated.js'); } catch (e) { activationModule = require('./activation'); }
+        const { validateActivationCode } = activationModule;
 
         const parts = [];
         try { parts.push(os.hostname()); } catch (e) {}
@@ -1024,22 +1025,14 @@ ipcMain.handle('activate-verify', async (event, code) => {
         const codeParts = c.split('-');
         if (codeParts.length !== 2) return { success: false, message: '激活码格式无效' };
 
-        const [prefix, hash] = codeParts;
-        let activationType = null;
+        const appVersion = app.getVersion();
+        const result = validateActivationCode(c, machineId, appVersion);
 
-        if (prefix === 'VP') {
-            const data = machineId + '|PERM';
-            const expected = 'VP-' + crypto.createHmac('sha256', SECRET).update(data).digest('hex').toUpperCase().substring(0, HASH_LEN);
-            if (c === expected) activationType = 'permanent';
-        } else if (prefix === 'VS') {
-            const appVersion = app.getVersion();
-            const data = machineId + '|SINGLE|' + appVersion;
-            const expected = 'VS-' + crypto.createHmac('sha256', SECRET).update(data).digest('hex').toUpperCase().substring(0, HASH_LEN);
-            if (c === expected) activationType = 'single';
+        if (!result.activated) {
+            return { success: false, message: '激活码无效或与本机不匹配' };
         }
 
-        if (!activationType) return { success: false, message: '激活码无效或与本机不匹配' };
-
+        const activationType = result.type;
         const store = loadStore();
         store['activation_type'] = activationType;
         store['activation_code'] = c;
@@ -1319,28 +1312,58 @@ ipcMain.handle('memory-optimize', async () => {
     if (process.platform !== 'win32') {
         return { success: false, error: '内存优化功能仅支持 Windows 系统' };
     }
-    return new Promise((resolve) => {
-        const scriptSrc = path.join(__dirname, 'scripts', 'memopt.ps1');
-        let scriptPath;
-        try {
-            if (scriptSrc.includes('app.asar')) {
-                const tmpDir = path.join(app.getPath('temp'), 'versepc-memopt');
-                fs.mkdirSync(tmpDir, { recursive: true });
-                scriptPath = path.join(tmpDir, 'memopt.ps1');
-                fs.copyFileSync(scriptSrc, scriptPath);
-            } else {
-                scriptPath = scriptSrc;
-            }
-        } catch (e) {
-            resolve({ success: false, error: 'extract script failed: ' + e.message });
-            return;
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const psScript = `$ErrorActionPreference = 'Continue'
+$OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -MemberDefinition '[DllImport("psapi.dll")] public static extern int EmptyWorkingSet(IntPtr hwProc);' -Name "W32PSAPI" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
+Add-Type -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] private static extern int SetSystemInformation(uint infoClass, IntPtr info, uint length);' -Name "W32SysInfo" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
+Add-Type -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr CreateFile(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);' -Name "W32File" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
+Add-Type -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern bool FlushFileBuffers(IntPtr hFile);' -Name "W32Flush" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
+Add-Type -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr hObject);' -Name "W32Close" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
+$before = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
+function DoRound {
+    try {
+        $h = [VP.W32File]::CreateFile("\\\\.\\C:", 0x40000000, 0x00000003, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+        if ($h -ne [IntPtr]::Zero -and [long]$h -ne -1) {
+            [void][VP.W32Flush]::FlushFileBuffers($h)
+            [void][VP.W32Close]::CloseHandle($h)
         }
-        if (!fs.existsSync(scriptPath)) {
-            resolve({ success: false, error: 'Script not found' });
+    } catch {}
+    Start-Sleep -Milliseconds 1000
+    Get-Process | ForEach-Object {
+        try { [void][VP.W32PSAPI]::EmptyWorkingSet($_.Handle) } catch {}
+    }
+    try { [VP.W32SysInfo]::SetSystemInformation(80, [IntPtr]::Zero, 0) } catch {}
+    try { [VP.W32SysInfo]::SetSystemInformation(81, [IntPtr]::Zero, 0) } catch {}
+    try { [VP.W32SysInfo]::SetSystemInformation(82, [IntPtr]::Zero, 0) } catch {}
+    try { [VP.W32SysInfo]::SetSystemInformation(39, [IntPtr]::Zero, 0) } catch {}
+}
+DoRound
+Start-Sleep -Seconds 3
+[GC]::Collect()
+[GC]::WaitForPendingFinalizers()
+DoRound
+Start-Sleep -Seconds 3
+[GC]::Collect()
+[GC]::WaitForPendingFinalizers()
+DoRound
+Start-Sleep -Seconds 2
+$after = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
+$diff = $after - $before
+@{ Before=$before; After=$after; Diff=$diff } | ConvertTo-Json -Compress`;
+    const tmpScript = path.join(os.tmpdir(), 'versepc_memopt.ps1');
+    return new Promise((resolve) => {
+        try {
+            fs.writeFileSync(tmpScript, psScript, 'utf8');
+        } catch (e) {
+            resolve({ success: false, error: 'write script failed: ' + e.message });
             return;
         }
         const { execFile } = require('child_process');
-        execFile('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { timeout: 30000 }, (err, stdout, stderr) => {
+        execFile('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmpScript], { timeout: 90000 }, (err, stdout, stderr) => {
+            try { fs.unlinkSync(tmpScript); } catch (_) {}
             if (err) {
                 resolve({ success: false, error: err.message });
                 return;
@@ -1349,9 +1372,9 @@ ipcMain.handle('memory-optimize', async () => {
                 const result = JSON.parse(stdout.trim());
                 resolve({
                     success: true,
-                    freedMB: Math.round(result.Diff / 1024),
-                    beforeMB: Math.round(result.Before / 1024),
-                    afterMB: Math.round(result.After / 1024)
+                    freedMB: Math.round(result.Diff),
+                    beforeMB: Math.round(result.Before),
+                    afterMB: Math.round(result.After)
                 });
             } catch (e) {
                 resolve({ success: false, error: 'parse failed: ' + e.message });
@@ -1506,33 +1529,6 @@ app.whenReady().then(async () => {
             }
             return handleVersePCProtocol(request);
         });
-
-        // 检查上次是否崩溃过，给用户一个提示
-        try {
-            if (require('fs').existsSync(_crashLogPath)) {
-                const _logContent = require('fs').readFileSync(_crashLogPath, 'utf8').trim();
-                if (_logContent) {
-                    const _lines = _logContent.split('\n');
-                    const _lastLine = _lines[_lines.length - 1] || '';
-                    const _timeMatch = _lastLine.match(/^\[(.+?)\]/);
-                    if (_timeMatch) {
-                        const _lastTime = new Date(_timeMatch[1]);
-                        const _ageMs = Date.now() - _lastTime.getTime();
-                        if (_ageMs < 24 * 60 * 60 * 1000) {
-                            setTimeout(() => {
-                                dialog.showMessageBox({
-                                    type: 'warning',
-                                    title: 'VersePC 上次启动异常',
-                                    message: 'VersePC 上次启动时遇到了问题',
-                                    detail: '可能的原因：\n• 缺少 VC++ 运行库（常见于新装系统）\n• 杀毒软件拦截了启动\n• 系统内存不足\n\n如果反复遇到此问题，请尝试：\n1. 安装 VC++ 运行库：https://aka.ms/vs/17/release/vc_redist.x64.exe\n2. 将 VersePC 加入杀毒软件白名单\n3. 以管理员身份运行',
-                                    buttons: ['我知道了']
-                                });
-                            }, 1500);
-                        }
-                    }
-                }
-            }
-        } catch (e) {}
 
         // 创建窗口（最优先）
         await createWindow();
@@ -2729,6 +2725,19 @@ function registerAIChatIPC() {
             name: p.name,
             models: p.models
         }));
+    });
+
+    ipcMain.handle('ai:is-enabled', async () => {
+        try {
+            const p = require('path');
+            const fs = require('fs');
+            const cfgPath = p.join(__dirname, 'ai-enabled.json');
+            if (fs.existsSync(cfgPath)) {
+                const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                return cfg.enabled === true;
+            }
+        } catch (_) {}
+        return false;
     });
 
     ipcMain.handle('ai:get-versions', async () => {

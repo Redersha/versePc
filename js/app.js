@@ -1139,22 +1139,47 @@ function dismissSupportModal() {
 }
 
 var ANNOUNCEMENT_CONTENT = {
-    version: '',
-    title: 'VersePC 小规模测试公告',
+    version: '1.3.0',
+    title: 'VersePC v1.3.0 测试版公告',
     body: `
         <div class="announcement-section">
-            <h4>更新内容</h4>
-            <ul>
-                <li>修复了 80 余个 bug</li>
-                <li>新增了许多神秘东西</li>
-            </ul>
+            <p>各位小伙伴们，这是最后一次测试版，明天就要正式发布了！请积极寻找并反馈 Bug，帮助我们一起把 VersePC 做得更好！</p>
         </div>
 
         <div class="announcement-section">
-            <h4>⚠️ 重要提示</h4>
+            <p style="color:#e74c3c;font-weight:bold;font-size:15px;">⚠️ 导入整合包功能暂时无法使用，请谅解！</p>
+        </div>
+
+        <div class="announcement-section">
+            <h4>更新内容</h4>
+
+            <h5>Bug 修复</h5>
             <ul>
-                <li style="color:#e74c3c;font-weight:bold;">不要使用整合包下载功能</li>
-                <li>如需使用 Forge，可通过"添加已有文件夹"导入外部 Forge 版本</li>
+                <li>修复新版 Forge（26.x）被错误重定向到 NeoForge 安装器</li>
+                <li>修复 NeoForge 安装后版本不显示、继承关系指向错误</li>
+                <li>修复 Forge 下载进度条回跳、安装失败时残留文件未清理</li>
+                <li>修复整合包下载后扩展名识别失败、重导入时配置缺失</li>
+                <li>修复 mrpack 整合包下载慢 + 处理器执行失败</li>
+                <li>修复整合包下载不兼容模组版本</li>
+                <li>修复账户详情页布局错乱、启动黑屏闪烁、主题色不生效</li>
+                <li>修复 GPU 异常页面语法错误导致崩溃</li>
+                <li>修复删除版本后原版重新出现、模组搜索结果不准确</li>
+            </ul>
+
+            <h5>性能优化</h5>
+            <ul>
+                <li>窗口立即显示，启动体验更快</li>
+                <li>库文件下载新增 curl 镜像兜底，国内更稳定</li>
+                <li>Forge 版本列表新增多个国内镜像源</li>
+            </ul>
+
+            <h5>新增功能</h5>
+            <ul>
+                <li>整合包下载支持自定义版本名称</li>
+                <li>陶瓦联机新增公共节点 + 网络诊断 API</li>
+                <li>集成 PCL 翻译数据库，整合包界面支持中文</li>
+                <li>AI 智能总结增加兜底机制</li>
+                <li>模组搜索改用内置工具，响应更快</li>
             </ul>
         </div>
 
@@ -2349,10 +2374,19 @@ async function updateVersionSelects() {
     if (installedVersions.length === 0) {
         homeList.innerHTML = '<p class="empty-text">暂无已安装的版本</p>';
     } else {
-        const normalVersions = installedVersions.filter(v => !v.error);
         const errorVersions = installedVersions.filter(v => v.error);
+        const normalVersions = installedVersions.filter(v => !v.error);
+        
+        const vanillaVersions = normalVersions.filter(v => {
+            return !v.isFabric && !v.isForge && !v.isNeoForge && !v.isOptiFine && !v.isLiteLoader && !v.isModpack;
+        });
+        const moddedVersions = normalVersions.filter(v => {
+            return v.isFabric || v.isForge || v.isNeoForge || v.isOptiFine || v.isLiteLoader || v.isModpack;
+        });
+
         const tntIcon = `<img src="assets/tnt.png" alt="TNT" width="40" height="40" style="image-rendering:pixelated;image-rendering:crisp-edges;">`;
-        let html = normalVersions.map(v => {
+        
+        const renderHomeVersionItem = (v) => {
             let badge = '原版', badgeClass = '';
             const iconParams = `id=${encodeURIComponent(v.id)}&type=release`;
             const forgeParam = v.isForge ? '&forge=true' : '';
@@ -2376,7 +2410,23 @@ async function updateVersionSelects() {
                     </div>
                 </div>
             </div>`;
-        }).join('');
+        };
+
+        let html = '';
+        
+        if (moddedVersions.length > 0) {
+            html += moddedVersions.map(renderHomeVersionItem).join('');
+        }
+
+        if (vanillaVersions.length > 0) {
+            html += `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:0 4px">
+                    <span style="font-size:12px;color:var(--text-muted);font-weight:600">\u26A0 基础版本 (${vanillaVersions.length})</span>
+                </div>
+                ${vanillaVersions.map(renderHomeVersionItem).join('')}
+            </div>`;
+        }
+
         if (errorVersions.length > 0) {
             const errorId = 'error-versions-' + Date.now();
             html += `<div class="error-versions-section">
@@ -2399,6 +2449,7 @@ async function updateVersionSelects() {
                 </div>
             </div>`;
         }
+        
         homeList.innerHTML = html;
     }
 }
@@ -2455,9 +2506,17 @@ function renderVersions() {
     }
 
     if (currentVersionTab === 'installed') {
-        const normalVersions = versions.filter(v => !v.error);
         const errorVersions = versions.filter(v => v.error);
-        let html = normalVersions.map(v => {
+        const normalVersions = versions.filter(v => !v.error);
+        
+        const vanillaVersions = normalVersions.filter(v => {
+            return !v.isFabric && !v.isForge && !v.isNeoForge && !v.isOptiFine && !v.isLiteLoader && !v.isModpack;
+        });
+        const moddedVersions = normalVersions.filter(v => {
+            return v.isFabric || v.isForge || v.isNeoForge || v.isOptiFine || v.isLiteLoader || v.isModpack;
+        });
+
+        const renderVersionItem = (v) => {
             const iconClass = v.type === 'snapshot' ? 'snapshot' : v.type === 'special' ? 'special' : 'installed';
             const iconParams = `id=${encodeURIComponent(v.id)}&type=${v.type || 'release'}`;
             const forgeParam = v.isForge ? '&forge=true' : '';
@@ -2490,7 +2549,23 @@ function renderVersions() {
                     ${deleteBtnHtml}
                 </div>
             </div>`;
-        }).join('');
+        };
+
+        let html = '';
+        
+        if (moddedVersions.length > 0) {
+            html += moddedVersions.map(renderVersionItem).join('');
+        }
+
+        if (vanillaVersions.length > 0) {
+            html += `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:0 4px">
+                    <span style="font-size:12px;color:var(--text-muted);font-weight:600">\u26A0 基础版本 (${vanillaVersions.length})</span>
+                </div>
+                ${vanillaVersions.map(renderVersionItem).join('')}
+            </div>`;
+        }
+
         if (errorVersions.length > 0) {
             const tntIcon = `<img src="assets/tnt.png" alt="TNT" width="24" height="24" style="image-rendering:pixelated;image-rendering:crisp-edges;">`;
             html += `<div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(239,68,68,0.2)">
@@ -2516,6 +2591,7 @@ function renderVersions() {
                 }).join('')}
             </div>`;
         }
+        
         container.innerHTML = html;
         return;
     }
@@ -2557,7 +2633,7 @@ const AVATAR_CACHE_VERSION = 9;
 let _pageTransitionLock = false;
 let _pendingPageTransition = null;
 
-function navigateToPage(pageName) {
+async function navigateToPage(pageName) {
     if (_pageTransitionLock) {
         _pendingPageTransition = pageName;
         return;
@@ -2599,6 +2675,54 @@ function navigateToPage(pageName) {
         document.querySelectorAll('.nav-sub-btn').forEach(b => b.classList.remove('active'));
         const navBtn = document.querySelector('.nav-btn[data-page="explore"]');
         if (navBtn) navBtn.classList.add('active');
+        
+        const isAIEnabled = window.electronAPI?.isAIEnabled && window.electronAPI.isAIEnabled();
+        const placeholder = document.getElementById('explore-placeholder');
+        const chatContainer = document.getElementById('explore-chat-container');
+        
+        let isActivated = false;
+        try {
+            if (window.electronAPI?.activateStatus) {
+                const activationStatus = window.electronAPI.activateStatus();
+                if (activationStatus && typeof activationStatus.then === 'function') {
+                    const result = await activationStatus;
+                    isActivated = result && result.activated;
+                } else {
+                    isActivated = activationStatus && activationStatus.activated;
+                }
+            }
+        } catch (e) {}
+        
+        if (!isActivated) {
+            if (placeholder) {
+                placeholder.style.display = 'block';
+                placeholder.innerHTML = `
+                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;">
+                        <h2 style="color:var(--text-primary);margin:0 0 12px;font-size:24px;font-weight:600;">需要激活码</h2>
+                        <p style="color:var(--text-secondary);margin:0 0 8px;font-size:15px;line-height:1.6;max-width:400px;">
+                            请输入激活码以使用AI助手功能
+                        </p>
+                        <p style="color:var(--text-secondary);margin:0 0 32px;font-size:14px;line-height:1.6;max-width:400px;">
+                            请前往设置页面输入激活码
+                        </p>
+                        <button onclick="showPage('settings')" style="display:inline-flex;align-items:center;gap:8px;padding:14px 32px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;text-decoration:none;border-radius:12px;font-size:16px;font-weight:600;transition:all 0.3s ease;box-shadow:0 4px 15px rgba(102,126,234,0.3);border:none;cursor:pointer;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 20px rgba(102,126,234,0.4)'" onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 4px 15px rgba(102,126,234,0.3)'">
+                            前往设置页面
+                        </button>
+                        <p style="color:var(--text-tertiary);margin:24px 0 0;font-size:12px;">
+                            在设置页面中输入激活码即可解锁AI助手功能
+                        </p>
+                    </div>
+                `;
+            }
+            if (chatContainer) chatContainer.style.display = 'none';
+            target.classList.add('active');
+            target.scrollTop = 0;
+            return;
+        }
+        
+        if (placeholder) placeholder.style.display = 'none';
+        if (chatContainer) chatContainer.style.display = '';
+        
         const disclaimerModal = document.getElementById('experimental-disclaimer-modal');
         if (disclaimerModal && !localStorage.getItem('versepc_disclaimer_accepted')) {
             disclaimerModal.style.display = 'flex';
@@ -4420,6 +4544,14 @@ async function openModDetail(projectId, source) {
     }
 }
 
+function _versionToExact(ver) {
+    if (!ver) return null;
+    var base = ver.split('-')[0];
+    if (ver.includes('w') || ver.includes('snapshot')) return '快照版';
+    var m = base.match(/^(\d+\.\d+(?:\.\d+)?)/);
+    return m ? m[1] : null;
+}
+
 function _versionToMajor(ver) {
     if (!ver) return null;
     if (ver.includes('w') || ver.includes('snapshot')) return '快照版';
@@ -4430,18 +4562,16 @@ function _versionToMajor(ver) {
     var minor = parseInt(parts[1], 10);
     if (major === 1 && minor >= 14) return '1.' + minor;
     if (major >= 25) return major + '.' + minor;
-    if (ver.includes('pre') || ver.includes('rc')) {
-        if (major === 1 && minor >= 14) return '1.' + minor;
-        return null;
-    }
     return null;
 }
 
-function _versionToDetail(ver) {
-    if (!ver) return null;
-    if (ver.includes('w') || ver.includes('snapshot')) return null;
-    var base = ver.split('-')[0];
-    return base || null;
+function _renderVersionTabs(mode, tabMap, sortedKeys) {
+    const tabsContainer = document.getElementById('md-version-tabs');
+    let tabsHtml = '<button class="md-vtab active" data-ver="" onclick="switchMdVersionTab(\'\')">全部</button>';
+    sortedKeys.forEach(key => {
+        tabsHtml += `<button class="md-vtab" data-group="${mode}" data-ver="${escapeHtml(key)}" onclick="switchMdVersionTab('${escapeOnclick(key)}', '${mode}')">${escapeHtml(key)} (${tabMap.get(key)})</button>`;
+    });
+    if (tabsContainer) tabsContainer.innerHTML = tabsHtml;
 }
 
 function renderMdVersionTabs(detailSeq) {
@@ -4465,39 +4595,43 @@ function renderMdVersionTabs(detailSeq) {
         }
         renderMdVersionList(filtered);
     } else {
+        const exactMap = new Map();
         const majorMap = new Map();
-        mdAllVersions.forEach(v => {
-            (v.gameVersions || []).forEach(gv => {
-                const major = _versionToMajor(gv);
-                if (major) {
-                    if (!majorMap.has(major)) majorMap.set(major, 0);
-                    majorMap.set(major, majorMap.get(major) + 1);
-                }
-            });
-        });
         let hasSnapshot = false;
         mdAllVersions.forEach(v => {
             (v.gameVersions || []).forEach(gv => {
-                if (gv.includes('w') || gv.includes('snapshot')) hasSnapshot = true;
+                if (gv.includes('w') || gv.includes('snapshot')) { hasSnapshot = true; return; }
+                const exact = _versionToExact(gv);
+                const major = _versionToMajor(gv);
+                if (exact) exactMap.set(exact, (exactMap.get(exact) || 0) + 1);
+                if (major) majorMap.set(major, (majorMap.get(major) || 0) + 1);
             });
         });
 
-        const sortedMajors = [...majorMap.keys()].sort((a, b) => {
+        const MAX_TABS = 9;
+        let mode = 'exact';
+        let tabMap = exactMap;
+        if (tabMap.size > MAX_TABS) { mode = 'major'; tabMap = majorMap; }
+        if (tabMap.size > MAX_TABS) { mode = 'major'; tabMap = majorMap; }
+
+        const sortFn = (a, b) => {
             if (a === '快照版') return -1;
             if (b === '快照版') return 1;
             const pa = a.split('.').map(Number);
             const pb = b.split('.').map(Number);
             if (pa[0] !== pb[0]) return pb[0] - pa[0];
-            return pb[1] - pa[1];
-        });
+            return (pb[1] || 0) - (pa[1] || 0);
+        };
+        const sortedKeys = [...tabMap.keys()].sort(sortFn);
 
-        let tabsHtml = '<button class="md-vtab active" data-ver="" onclick="switchMdVersionTab(\'\')">全部</button>';
-        sortedMajors.forEach(major => {
-            tabsHtml += `<button class="md-vtab" data-ver="${escapeHtml(major)}" onclick="switchMdVersionTab('${escapeOnclick(major)}')">${escapeHtml(major)}</button>`;
-        });
-        if (!hasSnapshot && sortedMajors.every(m => !m.includes('w'))) {
+        if (tabsContainer) {
+            let tabsHtml = '<button class="md-vtab active" data-ver="" onclick="switchMdVersionTab(\'\')">全部</button>';
+            sortedKeys.forEach(key => {
+                tabsHtml += `<button class="md-vtab" data-group="${mode}" data-ver="${escapeHtml(key)}" onclick="switchMdVersionTab('${escapeOnclick(key)}', '${mode}')">${escapeHtml(key)}</button>`;
+            });
+            tabsContainer.innerHTML = tabsHtml;
         }
-        if (tabsContainer) tabsContainer.innerHTML = tabsHtml;
+        window._mdTabMode = mode;
         renderMdVersionList(mdAllVersions);
     }
 }
@@ -4517,7 +4651,7 @@ async function loadMdVersions(projectId, source, detailSeq) {
     }
 }
 
-function switchMdVersionTab(ver) {
+function switchMdVersionTab(ver, mode) {
     mdCurrentTab = ver;
     
     document.querySelectorAll('.md-vtab').forEach(tab => {
@@ -4538,8 +4672,12 @@ function switchMdVersionTab(ver) {
                 return match;
             });
         } else {
+            const useMode = mode || window._mdTabMode || 'major';
             filtered = mdAllVersions.filter(v => {
-                return (v.gameVersions || []).some(gv => _versionToMajor(gv) === ver);
+                return (v.gameVersions || []).some(gv => {
+                    if (useMode === 'exact') return _versionToExact(gv) === ver;
+                    return _versionToMajor(gv) === ver;
+                });
             });
         }
     }
@@ -4959,6 +5097,21 @@ function _buildVersionItemHtml(v, idx) {
     </div>`;
 }
 
+function _sortVersionsByNumber(versions) {
+    return [...versions].sort((a, b) => {
+        const aNum = a.versionNumber || a.versionName || '';
+        const bNum = b.versionNumber || b.versionName || '';
+        const aParts = aNum.split(/[.\-_]/).map(p => parseInt(p, 10) || 0);
+        const bParts = bNum.split(/[.\-_]/).map(p => parseInt(p, 10) || 0);
+        for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+            const aVal = aParts[i] || 0;
+            const bVal = bParts[i] || 0;
+            if (aVal !== bVal) return bVal - aVal;
+        }
+        return 0;
+    });
+}
+
 function renderMdVersionList(versions) {
     const container = document.getElementById('md-version-list');
     if (versions.length === 0) {
@@ -4966,9 +5119,10 @@ function renderMdVersionList(versions) {
         return;
     }
 
-    _mdvCurrentVersions = versions;
+    const sorted = _sortVersionsByNumber(versions);
+    _mdvCurrentVersions = sorted;
     _mdvRenderedCount = 0;
-    const initial = versions.slice(0, MDV_INITIAL_RENDER);
+    const initial = sorted.slice(0, MDV_INITIAL_RENDER);
     container.innerHTML = initial.map((v, i) => _buildVersionItemHtml(v, i)).join('');
     _mdvRenderedCount = initial.length;
 
@@ -11344,7 +11498,8 @@ async function saveOtherSettings() {
         anonymousDataCollection: document.getElementById('anonymous-data-collection')?.checked,
         debugMode: document.getElementById('debug-mode')?.checked,
         verboseLogging: document.getElementById('verbose-logging')?.checked,
-        consoleDebug: document.getElementById('enable-console-debug')?.checked
+        consoleDebug: document.getElementById('enable-console-debug')?.checked,
+        autoMemoryOptimize: document.getElementById('auto-memory-optimize')?.checked
     };
 
     try {
@@ -11380,6 +11535,7 @@ async function resetOtherSettings() {
     document.getElementById('debug-mode').checked = false;
     document.getElementById('verbose-logging').checked = false;
     document.getElementById('enable-console-debug').checked = false;
+    document.getElementById('auto-memory-optimize').checked = true;
 
     API.saveSetting('autoSetChinese', true).catch(() => {});
     showToast('其他设置已重置', 'success');
@@ -11412,6 +11568,7 @@ async function loadOtherSettings() {
             if (settings.debugMode !== undefined) document.getElementById('debug-mode').checked = settings.debugMode;
             if (settings.verboseLogging !== undefined) document.getElementById('verbose-logging').checked = settings.verboseLogging;
             if (settings.consoleDebug !== undefined) document.getElementById('enable-console-debug').checked = settings.consoleDebug;
+            if (settings.autoMemoryOptimize !== undefined) document.getElementById('auto-memory-optimize').checked = settings.autoMemoryOptimize;
         }
     } catch (e) {
         console.error('[Settings] Load other settings error:', e);
@@ -11705,11 +11862,22 @@ const SPONSORS = [
     '爱发电用户_VUch', '峰~', '京墨', '鲨掉', '爱发电用户_ef5f5',
     '爱发电用户_3e0c7', '张琳轩', 'JasonDeng', '熙城种', '妺妤', 'Shanre',
     '爱发电用户_bb606', 'penguinfly_java', '爱发电用户_xKT7', '梦七年', '池鱼',
-    'LaiChai', '现金小姐姐', '呼噜', 'nojang_JY', 'ADF白布', 'ffg', '鱼蛋卷',
+    'LaiChai', '现金小姐姐', '呼噜', 'nojang_JY', 'ADF白布', 'ffg',
     'sheng_1062', '爱发电用户_f00d6', '爱发电用户_83d3b', '哈喽芋泥', '樻',
     '爱发电用户_xtWd', 'kiroli', '爱发电用户_19443', 'ZYL', '爱发电用户_be45c',
     '爱发电用户_2166c', 'MaoJunyu2012', '纯〇科技', '爱发电用户_39960', '寻自游',
-    'skin_c', '竹雾', '爱发电用户_979a9'
+    'skin_c', '竹雾', '爱发电用户_979a9',
+    '爱发电用户_7BtT', 'zH', '快夏波', 'lixinmiao', '?', '爱发电用户_5711a',
+    '爱发电用户_3e7d0', 'lost', '霖', '爱发电用户_t6hb', '??', '界鱼',
+    '爱发电用户_b5d63', '恋爱原计划', 'LADFS', '臻臻公主', '爱发电用户_7CN6',
+    '爱发电用户_f15f5', 'Agoin_Y', 'yeccsh', 'k', 'BYX', 'Flugel',
+    '爱发电用户_ff69f', '信好有你', '机械小白', '简', '宇宙', '爱发电用户_5ec06',
+    '仁', '我嘞个豆', '爱发电用户_wDHc', '与秋赴约', '爱发电用户_rNnt', '雾浔.er',
+    '爱发电用户_b0d51', '爱发电用户_afc17', '爱发电用户_e3bc6', '爱发电用户_aa5a6',
+    'learen', '爱发电用户_AsWk', 'Fanzezheng', '爱发电用户_d055f', '懿屿',
+    '爱发电用户_64272', '爱发电用户_e3b52', '爱发电用户_0fe8d', '爱发电用户_eedfd',
+    '爱发电用户_uDkT', '爱发电用户_3c03e', '烬海', 'barnett', '韶末',
+    '爱发电用户_TJ3b', '零', '爱发电用户_ab90e', '爱发电用户_a5a98', 'Fish_gods'
 ];
 
 function renderSponsors(filter) {
@@ -11861,6 +12029,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (window.electronAPI?.platform && window.electronAPI.platform !== 'win32') {
         document.querySelectorAll('.win-only').forEach(el => el.style.display = 'none');
+    }
+
+    if (window.electronAPI?.isAIEnabled && !window.electronAPI.isAIEnabled()) {
+        const navBtn = document.getElementById('nav-explore-btn');
+        if (navBtn) {
+            navBtn.querySelector('span').textContent = '实验性';
+        }
     }
 });
 

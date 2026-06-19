@@ -62,9 +62,9 @@
 
 const MOD_CHINESE_NAMES = {
     "fabric-api": "Fabric API",
-    "fabric": "Fabric 模组加载器",
-    "forge": "Forge 模组加载器",
-    "neoforge": "NeoForge 模组加载器",
+    "fabric": "Fabric",
+    "forge": "Forge",
+    "neoforge": "NeoForge",
     "optifine": "高清修复",
     "sodium": "钠·渲染优化",
     "lithium": "锂·服务端优化",

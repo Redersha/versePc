@@ -233,6 +233,7 @@ const API = {
     // === 游戏版本管理 ===
     getVersions: (refresh = false) => apiGet('/api/versions', { refresh: refresh ? 'true' : '' }),
     getVersionDetails: (url) => apiGet('/api/version-details', { url }),
+    getVersionLocalDetails: (versionId) => apiGet('/api/version-local-details', { versionId }),
     deleteVersion: (versionId, permanent) => apiPost('/api/version/delete', { versionId, permanent: !!permanent }),
     getDeleteChain: (versionId) => apiPost('/api/version/delete-chain', { versionId }),
     renameVersion: (versionId, newName) => apiPost('/api/version/rename', { versionId, newName }),

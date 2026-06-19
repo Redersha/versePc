@@ -6936,9 +6936,9 @@ body {
 
 .loader-badge {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
     font-weight: 600;
     margin-right: 4px;
 }
@@ -14065,7 +14065,6 @@ body {
     gap: 6px;
     max-height: 110px;
     overflow: hidden;
-    transition: max-height 0.3s ease;
 }
 
 .sponsor-grid.expanded {
