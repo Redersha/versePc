@@ -45,3 +45,25 @@ function formatDuration(seconds) {
     if (seconds < 3600) return Math.floor(seconds / 60) + '分' + (seconds % 60) + '秒';
     return Math.floor(seconds / 3600) + '时' + Math.floor((seconds % 3600) / 60) + '分';
 }
+
+const _lazyScriptCache = {};
+function _lazyLoadScript(src) {
+    if (_lazyScriptCache[src]) return _lazyScriptCache[src];
+    _lazyScriptCache[src] = new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('Failed to load: ' + src));
+        document.head.appendChild(s);
+    });
+    return _lazyScriptCache[src];
+}
+
+function _lazyLoadCSS(href) {
+    if (document.querySelector(`link[href="${href}"]`)) return;
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = href;
+    document.head.appendChild(l);
+}

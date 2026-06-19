@@ -2614,7 +2614,7 @@ function loadSettings() {
         versionSource: 'auto',
         maxThreads: 16,
         enableChunkDownload: true,
-        maxChunksPerFile: 16,
+        maxChunksPerFile: 32,
         speedLimit: 0,
         targetDir: '',
         sslVerify: false,
@@ -4264,7 +4264,7 @@ async function fetchWithRacing(tasks, timeout = 15000) {
 
 const DownloadManager = {
     activeConnections: 0,
-    connectionLimit: 32,
+    connectionLimit: 64,
     speedHistory: [],
     totalBytesDownloaded: 0,
     lastBytesSnapshot: 0,
@@ -4546,7 +4546,7 @@ async function downloadFileH2(url, destPath, options = {}) {
 }
 
 async function downloadFileChunked(url, destPath, options = {}) {
-    const { retries = 3, onProgress = null, sha1 = null, timeout = 120000, mirrors = null, abortSignal = null, agent: customAgent = null } = options;
+    const { retries = 3, onProgress = null, sha1 = null, timeout = 120000, mirrors = null, abortSignal = null, agent: customAgent = null, maxChunks: optMaxChunks = null } = options;
     const minChunkSize = 512 * 1024;
     const CHUNK_THRESHOLD = 1 * 1024 * 1024;
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
@@ -4597,7 +4597,7 @@ async function downloadFileChunked(url, destPath, options = {}) {
                 if (!useChunk || fileSize <= 0) {
                     return await _dlSingle(workingUrl, destPath, { onProgress, sha1, timeout, abortSignal, agent: customAgent });
                 }
-                const maxC = Math.min(parseInt(settings.maxChunksPerFile, 10) || 8, 16);
+                const maxC = optMaxChunks !== null ? optMaxChunks : Math.min(parseInt(settings.maxChunksPerFile, 10) || 16, 32);
                 const cCount = Math.min(maxC, Math.ceil(fileSize / minChunkSize));
                 const cSize = Math.ceil(fileSize / cCount);
                 const chunks = [];
@@ -5056,6 +5056,29 @@ function getMirrorUrls(originalUrl) {
     }
     urls.push(originalUrl);
     return urls;
+}
+
+async function probeMirrorSpeed(urls, probeSize = 65536, timeoutMs = 5000) {
+    if (!urls || urls.length <= 1) return urls;
+    const probes = urls.map(async (url) => {
+        const start = Date.now();
+        try {
+            const r = await httpGet(url, { start: 0, end: probeSize - 1, timeout: timeoutMs });
+            const chunks = [];
+            for await (const c of r.stream) chunks.push(c);
+            const elapsed = Date.now() - start;
+            const bytes = Buffer.concat(chunks).length;
+            const speed = elapsed > 0 ? bytes / (elapsed / 1000) : 0;
+            return { url, speed, elapsed, ok: true };
+        } catch (e) {
+            return { url, speed: 0, elapsed: 99999, ok: false };
+        }
+    });
+    const results = await Promise.all(probes);
+    results.sort((a, b) => b.speed - a.speed);
+    const sorted = results.map(r => r.url);
+    console.log(`[Mirror] 测速结果: ${results.map(r => `${r.ok ? (r.speed / 1024).toFixed(0) + 'KB/s' : 'FAIL'} ${r.url.substring(0, 60)}`).join(' | ')}`);
+    return sorted;
 }
 
 function getMirrorUrl(originalUrl) {
@@ -10502,8 +10525,23 @@ function injectOfflineSkin(versionJson, account, assetsRoot) {
         if (!assetsRoot) assetsRoot = ASSETS_DIR;
 
         const skinModel = account.skinModel || 'default';
-        const targetName = skinModel === 'slim' ? 'alex' : 'steve';
-        const targetPath = `minecraft/textures/entity/${targetName}.png`;
+        const isSlim = skinModel === 'slim';
+        const primaryName = isSlim ? 'alex' : 'steve';
+        const altName = isSlim ? 'steve' : 'alex';
+
+        // Candidate skin paths across MC versions:
+        // - Legacy (<=1.20.1): entity/<name>.png
+        // - 1.20.2+: entity/player/<name>.png and entity/player/slim/<name>.png
+        const primaryPaths = [
+            `minecraft/textures/entity/${primaryName}.png`,
+            `minecraft/textures/entity/player/${primaryName}.png`,
+            `minecraft/textures/entity/player/slim/${primaryName}.png`,
+        ];
+        const altPaths = [
+            `minecraft/textures/entity/${altName}.png`,
+            `minecraft/textures/entity/player/${altName}.png`,
+            `minecraft/textures/entity/player/slim/${altName}.png`,
+        ];
 
         if (!fs.existsSync(SKIN_BACKUP_DIR)) fs.mkdirSync(SKIN_BACKUP_DIR, { recursive: true });
 
@@ -10513,60 +10551,67 @@ function injectOfflineSkin(versionJson, account, assetsRoot) {
             if (!fs.existsSync(indexPath)) indexPath = path.join(ASSETS_DIR, 'indexes', `${assetIndexId}.json`);
             if (fs.existsSync(indexPath)) {
                 const indexData = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-                const obj = indexData.objects?.[targetPath];
-                if (obj && obj.hash) {
-                    const hash = obj.hash;
-                    const subDir = hash.substring(0, 2);
-                    let objectPath = path.join(assetsRoot, 'objects', subDir, hash);
-                    if (!fs.existsSync(objectPath)) objectPath = path.join(ASSETS_DIR, 'objects', subDir, hash);
-                    if (fs.existsSync(objectPath)) {
-                        const backupName = `${assetIndexId}_${hash}`;
-                        const backupPath = path.join(SKIN_BACKUP_DIR, backupName);
-                        if (!fs.existsSync(backupPath)) {
-                            fs.copyFileSync(objectPath, backupPath);
+
+                for (const targetPath of primaryPaths) {
+                    const obj = indexData.objects?.[targetPath];
+                    if (obj && obj.hash) {
+                        const hash = obj.hash;
+                        const subDir = hash.substring(0, 2);
+                        let objectPath = path.join(assetsRoot, 'objects', subDir, hash);
+                        if (!fs.existsSync(objectPath)) objectPath = path.join(ASSETS_DIR, 'objects', subDir, hash);
+                        if (fs.existsSync(objectPath)) {
+                            const backupName = `${assetIndexId}_${hash}`;
+                            const backupPath = path.join(SKIN_BACKUP_DIR, backupName);
+                            if (!fs.existsSync(backupPath)) {
+                                fs.copyFileSync(objectPath, backupPath);
+                            }
+                            fs.copyFileSync(skinPath, objectPath);
+                            backups.push({ type: 'object', path: objectPath, backup: backupPath });
+                            console.log(`[Skin] 已注入 ${targetPath} -> objects/${subDir}/${hash}`);
                         }
-                        fs.copyFileSync(skinPath, objectPath);
-                        backups.push({ type: 'object', path: objectPath, backup: backupPath });
-                        console.log(`[Skin] 已注入 ${targetName}.png -> objects/${subDir}/${hash}`);
                     }
                 }
-                const altTarget = skinModel === 'slim' ? 'steve' : 'alex';
-                const altPath = `minecraft/textures/entity/${altTarget}.png`;
-                const altObj = indexData.objects?.[altPath];
-                if (altObj && altObj.hash) {
-                    const altHash = altObj.hash;
-                    const altSub = altHash.substring(0, 2);
-                    let altObjectPath = path.join(assetsRoot, 'objects', altSub, altHash);
-                    if (!fs.existsSync(altObjectPath)) altObjectPath = path.join(ASSETS_DIR, 'objects', altSub, altHash);
-                    if (fs.existsSync(altObjectPath)) {
-                        const altBackupName = `${assetIndexId}_${altHash}`;
-                        const altBackupPath = path.join(SKIN_BACKUP_DIR, altBackupName);
-                        if (!fs.existsSync(altBackupPath)) {
-                            fs.copyFileSync(altObjectPath, altBackupPath);
+
+                for (const altPath of altPaths) {
+                    const altObj = indexData.objects?.[altPath];
+                    if (altObj && altObj.hash) {
+                        const altHash = altObj.hash;
+                        const altSub = altHash.substring(0, 2);
+                        let altObjectPath = path.join(assetsRoot, 'objects', altSub, altHash);
+                        if (!fs.existsSync(altObjectPath)) altObjectPath = path.join(ASSETS_DIR, 'objects', altSub, altHash);
+                        if (fs.existsSync(altObjectPath)) {
+                            const altBackupName = `${assetIndexId}_${altHash}`;
+                            const altBackupPath = path.join(SKIN_BACKUP_DIR, altBackupName);
+                            if (!fs.existsSync(altBackupPath)) {
+                                fs.copyFileSync(altObjectPath, altBackupPath);
+                            }
+                            backups.push({ type: 'object_no_replace', path: altObjectPath, backup: altBackupPath });
                         }
-                        backups.push({ type: 'object_no_replace', path: altObjectPath, backup: altBackupPath });
                     }
                 }
             }
         }
 
-        const virtualTargets = [
-            path.join(assetsRoot, 'virtual', 'legacy', targetPath),
-            path.join(ASSETS_DIR, 'virtual', 'legacy', targetPath)
-        ];
+        const virtualTargets = [];
+        for (const targetPath of primaryPaths) {
+            virtualTargets.push(path.join(assetsRoot, 'virtual', 'legacy', targetPath));
+            virtualTargets.push(path.join(ASSETS_DIR, 'virtual', 'legacy', targetPath));
+        }
         for (const vPath of virtualTargets) {
             if (fs.existsSync(vPath)) {
                 const vBackup = path.join(SKIN_BACKUP_DIR, `virtual_${path.basename(vPath)}_${Date.now()}`);
                 fs.copyFileSync(vPath, vBackup);
                 fs.copyFileSync(skinPath, vPath);
                 backups.push({ type: 'virtual', path: vPath, backup: vBackup });
-                console.log(`[Skin] 已注入 virtual ${targetName}.png`);
+                console.log(`[Skin] 已注入 virtual ${path.basename(vPath)}`);
             }
         }
 
-        const gameDirTargets = [
-            path.join(account.gameDir || '', 'resources', targetPath),
-        ];
+        const gameDirBase = account.gameDir || '';
+        const gameDirTargets = [];
+        for (const targetPath of primaryPaths) {
+            gameDirTargets.push(path.join(gameDirBase, 'resources', targetPath));
+        }
         for (const gPath of gameDirTargets) {
             const gDir = path.dirname(gPath);
             if (fs.existsSync(path.dirname(gDir))) {
@@ -10578,7 +10623,7 @@ function injectOfflineSkin(versionJson, account, assetsRoot) {
                 }
                 fs.copyFileSync(skinPath, gPath);
                 backups.push({ type: 'gamedir_inject', path: gPath, backup: null });
-                console.log(`[Skin] 已注入 gamedir ${targetName}.png`);
+                console.log(`[Skin] 已注入 gamedir ${path.basename(gPath)}`);
             }
         }
     } catch (e) {
@@ -12259,10 +12304,11 @@ async function doLaunch(versionId, versionJson, settings, account, externalVersi
                         gameLogBuffer.push(...lines);
                         if (gameLogBuffer.length > 5000) gameLogBuffer = gameLogBuffer.slice(-3000);
                         for (const line of lines) {
-                            const lanMatch = line.match(/Local game hosted on[:\s]+(\d{4,5})/i) ||
-                                             line.match(/Started serving on[:\s]+(\d{4,5})/i) ||
-                                             line.match(/Opening LAN server on[:\s]+(\d{4,5})/i) ||
-                                             line.match(/LAN server started on[:\s]+(\d{4,5})/i);
+                            const lanMatch = line.match(/Local game hosted on.*?(\d{4,5})/i) ||
+                                             line.match(/Started serving on.*?(\d{4,5})/i) ||
+                                             line.match(/Opening LAN server.*?(\d{4,5})/i) ||
+                                             line.match(/LAN server started.*?(\d{4,5})/i) ||
+                                             line.match(/本地游戏已托管.*?(\d{4,5})/i);
                             if (lanMatch) {
                                 instanceInfo.lanPort = parseInt(lanMatch[1], 10);
                                 detectedLanPort = parseInt(lanMatch[1], 10);
@@ -12454,10 +12500,11 @@ async function doLaunch(versionId, versionJson, settings, account, externalVersi
                 gameLogBuffer.push(...lines);
                 if (gameLogBuffer.length > 5000) gameLogBuffer = gameLogBuffer.slice(-3000);
                 for (const line of lines) {
-                    const lanMatch = line.match(/Local game hosted on[:\s]+(\d{4,5})/i) ||
-                                     line.match(/Started serving on[:\s]+(\d{4,5})/i) ||
-                                     line.match(/Opening LAN server on[:\s]+(\d{4,5})/i) ||
-                                     line.match(/LAN server started on[:\s]+(\d{4,5})/i);
+                    const lanMatch = line.match(/Local game hosted on.*?(\d{4,5})/i) ||
+                                     line.match(/Started serving on.*?(\d{4,5})/i) ||
+                                     line.match(/Opening LAN server.*?(\d{4,5})/i) ||
+                                     line.match(/LAN server started.*?(\d{4,5})/i) ||
+                                     line.match(/本地游戏已托管.*?(\d{4,5})/i);
                     if (lanMatch) {
                         instanceInfo.lanPort = parseInt(lanMatch[1], 10);
                         detectedLanPort = parseInt(lanMatch[1], 10);
@@ -13719,7 +13766,8 @@ async function installForge(gameVersion, forgeVersion, onProgress = null, mirror
         '--libs', LIBRARIES_DIR,
         '--verdir', versionDir,
         '--forgever', versionStr,
-        '--config', configPath
+        '--config', configPath,
+        '--appdir', path.resolve(__dirname)
     ];
 
     return new Promise((resolve) => {
@@ -14215,6 +14263,39 @@ async function installNeoForge(gameVersion, neoVersion, onProgress = null) {
 
         // 10. 补全库 + 运行处理器（merge 函数还会下载缺失的库和执行二进制补丁）
         if (onProgress) onProgress(0.7, '补全 NeoForge 库和参数...');
+        if (!fs.existsSync(binpatchPath)) {
+            console.warn(`[NeoForge] clientdata.lzma 缺失 (${binpatchPath}), 尝试重新提取...`);
+            let reextracted = false;
+            if (fs.existsSync(installerPath)) {
+                try {
+                    const retryZip = new AdmZip(installerPath);
+                    const retryEntry = retryZip.getEntry('data/client.lzma');
+                    if (retryEntry) {
+                        fs.mkdirSync(binpatchDir, { recursive: true });
+                        fs.writeFileSync(binpatchPath, retryEntry.getData());
+                        console.log(`[NeoForge] 重新提取成功: ${binpatchPath} (${fs.statSync(binpatchPath).size} bytes)`);
+                        reextracted = true;
+                    } else {
+                        console.warn(`[NeoForge] 安装器中无 data/client.lzma entry`);
+                    }
+                } catch (e) { console.warn(`[NeoForge] 重新提取失败: ${e.message}`); }
+            } else {
+                console.warn(`[NeoForge] 安装器 JAR 也不存在: ${installerPath}`);
+            }
+            if (!reextracted) {
+                const errMsg = `NeoForge 安装失败: clientdata.lzma 提取失败，请检查网络后重试安装`;
+                if (onProgress) onProgress(1, errMsg);
+                return { success: false, error: errMsg };
+            }
+        }
+        const installerLibPath2 = path.join(LIBRARIES_DIR, 'net', 'neoforged', pkg, neoVersion, `${pkg}-${neoVersion}-installer.jar`);
+        if (!fs.existsSync(installerLibPath2) && fs.existsSync(installerPath)) {
+            try {
+                fs.mkdirSync(path.dirname(installerLibPath2), { recursive: true });
+                fs.copyFileSync(installerPath, installerLibPath2);
+                console.log(`[NeoForge] 复制 installer → ${installerLibPath2}`);
+            } catch (_) {}
+        }
         try { await mergeNeoForgeLoaderToVersion(versionId, gameVersion, neoVersion, onProgress); } catch (mergeErr) {
             console.warn(`[NeoForge] merge 补全失败: ${mergeErr.message}`);
         }
@@ -14618,6 +14699,20 @@ async function mergeNeoForgeLoaderToVersion(versionId, gameVersion, neoVersion, 
                     installerMainClass = vData.mainClass || null;
                     installerArgs = vData.arguments || null;
                 }
+                const clientLzmaEntry = zip.getEntry('data/client.lzma');
+                if (clientLzmaEntry) {
+                    const isLegacy = neoVersion.startsWith('1.20.1-');
+                    const pkg = isLegacy ? 'forge' : 'neoforge';
+                    const clDir = path.join(LIBRARIES_DIR, 'net', 'neoforged', pkg, neoVersion);
+                    const clPath = path.join(clDir, `${pkg}-${neoVersion}-clientdata.lzma`);
+                    if (!fs.existsSync(clPath)) {
+                        fs.mkdirSync(clDir, { recursive: true });
+                        fs.writeFileSync(clPath, clientLzmaEntry.getData());
+                        console.log(`[NeoForge] 提取 clientdata.lzma → ${clPath} (${fs.statSync(clPath).size} bytes)`);
+                    }
+                } else {
+                    console.warn(`[NeoForge] 安装器中无 data/client.lzma`);
+                }
             } catch (zipErr) {
                 console.warn(`[NeoForge] 解压安装器失败: ${zipErr.message}`);
             }
@@ -14735,6 +14830,16 @@ async function mergeNeoForgeLoaderToVersion(versionId, gameVersion, neoVersion, 
 
     if (onProgress) onProgress(0.9, '执行 NeoForge 处理器...');
 
+    const _isLegacy = neoVersion.startsWith('1.20.1-');
+    const _pkg = _isLegacy ? 'forge' : 'neoforge';
+    const _clientdataPath = path.join(LIBRARIES_DIR, 'net', 'neoforged', _pkg, neoVersion, `${_pkg}-${neoVersion}-clientdata.lzma`);
+    if (!fs.existsSync(_clientdataPath)) {
+        const _errMsg = `NeoForge 安装失败: clientdata.lzma 缺失 (${_clientdataPath})，请检查网络后重试`;
+        console.error(`[NeoForge] ${_errMsg}`);
+        if (onProgress) onProgress(1, _errMsg);
+        throw new Error(_errMsg);
+    }
+
     try {
         if (onProgress) onProgress(0.92, '打补丁中...');
 
@@ -14747,15 +14852,53 @@ async function mergeNeoForgeLoaderToVersion(versionId, gameVersion, neoVersion, 
             fs.writeFileSync(_scriptDst, _srcContent, 'utf8');
         } catch(_) {}
 
-        try {
-            const { execSync: _es } = require('child_process');
-            const _cmd = `node "${_scriptDst}" --root "${DATA_DIR}" --libs "${LIBRARIES_DIR}" --mcver "${gameVersion}" --neover "${neoVersion}"`;
-            console.log(`[NeoForge] Running: ${_cmd}`);
-            const _out = _es(_cmd, { timeout: 240000, encoding: 'utf8', maxBuffer: 10*1024*1024, windowsHide: true });
-            console.log(`[NeoForge] Script output:\n${_out}`);
-        } catch (_procErr) {
-            console.error(`[NeoForge] Script failed: ${_procErr.message}`);
-        }
+        await new Promise((resolveProc) => {
+            const { spawn: _sp } = require('child_process');
+            const _args = [_scriptDst, '--root', DATA_DIR, '--libs', LIBRARIES_DIR, '--mcver', gameVersion, '--neover', neoVersion];
+            console.log(`[NeoForge] Running: node ${_args.join(' ')}`);
+            const _child = _sp('node', _args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '' } });
+            let _stdout = '', _stderr = '';
+            const _progressMap = [
+                ['Running Processor', 0.93], ['Command:', 0.93],
+                ['DOWNLOAD_MOJMAPS', 0.94], ['MERGE_MAPPING', 0.95],
+                ['Splitting:', 0.96], ['Processing', 0.96],
+                ['Sorting', 0.97], ['Remapping', 0.98],
+                ['Injecting', 0.99], ['SUCCESS', 0.995],
+            ];
+            const _parseLine = (line) => {
+                console.log(`[NeoForge] ${line}`);
+                for (const [keyword, pct] of _progressMap) {
+                    if (line.includes(keyword)) {
+                        if (onProgress) onProgress(pct, line.substring(0, 80));
+                        break;
+                    }
+                }
+            };
+            _child.stdout.on('data', (data) => {
+                _stdout += data.toString();
+                const lines = _stdout.split('\n');
+                _stdout = lines.pop();
+                for (const line of lines) _parseLine(line.trim());
+            });
+            _child.stderr.on('data', (data) => {
+                _stderr += data.toString();
+                const lines = _stderr.split('\n');
+                _stderr = lines.pop();
+                for (const line of lines) _parseLine(line.trim());
+            });
+            const _killTimer = setTimeout(() => { try { _child.kill('SIGKILL'); } catch(_){} }, 240000);
+            _child.on('close', (code) => {
+                clearTimeout(_killTimer);
+                if (_stdout.trim()) _parseLine(_stdout.trim());
+                if (code !== 0) console.error(`[NeoForge] Script exited with code ${code}`);
+                resolveProc();
+            });
+            _child.on('error', (err) => {
+                clearTimeout(_killTimer);
+                console.error(`[NeoForge] Script spawn error: ${err.message}`);
+                resolveProc();
+            });
+        });
 
         const _logFile = path.join(DATA_DIR, 'temp', 'neoforge-processor.log');
         if (fs.existsSync(_logFile)) {
@@ -16046,7 +16189,8 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
     }
 
     const packName    = (manifest.name || path.basename(filePath, path.extname(filePath))).replace(/[<>:"/\\|?*]/g, '_');
-    const mcVersion   = manifest.dependencies && manifest.dependencies.minecraft ? manifest.dependencies.minecraft : '';
+    let   mcVersion   = (manifest.dependencies && manifest.dependencies.minecraft && manifest.dependencies.minecraft !== 'minecraft' && /^\d/.test(manifest.dependencies.minecraft)) ? manifest.dependencies.minecraft : '';
+    if (mcVersion && manifest.versionId && mcVersion === manifest.versionId) { mcVersion = ''; }
     const fabricVer   = manifest.dependencies ? manifest.dependencies['fabric-loader'] : undefined;
     let   forgeVer    = manifest.dependencies ? manifest.dependencies.forge : undefined;
     const neoforgeVer = manifest.dependencies ? manifest.dependencies.neoforge : undefined;
@@ -22646,6 +22790,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 const gameVersion = data.gameVersion;
                 const forgeVersion = data.forgeVersion;
                 if (!gameVersion || !forgeVersion) { sendError('Missing parameters', 400); break; }
+                if (!/^\d+\.\d+/.test(gameVersion)) { sendJSON({ success: false, error: `无效的 Minecraft 版本: ${gameVersion}` }); break; }
                 const result = await installForge(gameVersion, forgeVersion);
                 sendJSON(result);
                 break;
@@ -24681,19 +24826,51 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                             };
                             console.log(`[Modpack] 开始下载: ${safeName} (URL: ${downloadUrl?.substring(0, 80)}...)`);
                             const _mpUrls = getMirrorUrls(downloadUrl);
-                            // Reuse shared agent (keepAlive:true) instead of creating a throwaway agent per download.
-                            // A throwaway agent with keepAlive:false forces a new TCP+TLS handshake for every chunk,
-                            // adding 6-19s to large modpack downloads.
-                            for (const _tryUrl of _mpUrls) {
+                            // PCL2-style: probe mirrors and sort by speed before downloading
+                            let _sortedUrls = _mpUrls;
+                            try {
+                                const _probed = await probeMirrorSpeed(_mpUrls, 65536, 5000);
+                                _sortedUrls = _probed;
+                            } catch (e) { console.warn(`[Modpack] 测速失败，使用默认顺序: ${e.message}`); }
+                            console.log(`[Modpack] 下载源顺序: ${_sortedUrls.map(u => u.substring(0, 60)).join(' -> ')}`);
+
+                            // Dynamic chunk count based on file size (PCL2 logic)
+                            let _maxChunks = 16;
+                            if (fileSize > 0) {
+                                if (fileSize <= 1 * 1024 * 1024) _maxChunks = 1;
+                                else if (fileSize <= 10 * 1024 * 1024) _maxChunks = 4;
+                                else if (fileSize <= 50 * 1024 * 1024) _maxChunks = 8;
+                                else _maxChunks = 16;
+                            }
+                            console.log(`[Modpack] 文件大小 ${(fileSize / 1024 / 1024).toFixed(1)}MB，分块数 ${_maxChunks}`);
+
+                            let _dlSuccess = false;
+                            for (const _tryUrl of _sortedUrls) {
                                 if (abortController.signal && abortController.signal.aborted) break;
-                                try {
-                                    console.log(`[Modpack] 尝试: ${_tryUrl.substring(0, 80)}...`);
-                                    await downloadFileChunked(_tryUrl, destPath, { onProgress: _mpOnProgress, retries: 0, abortSignal: abortController.signal, timeout: 600000 });
-                                    if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) { console.log(`[Modpack] 下载成功: ${safeName}`); break; }
-                                } catch (e) {
+                                for (let _attempt = 0; _attempt < 3; _attempt++) {
                                     if (abortController.signal && abortController.signal.aborted) break;
-                                    console.warn(`[Modpack] 失败: ${e.message}`);
+                                    try {
+                                        console.log(`[Modpack] 尝试 (${_attempt + 1}/3): ${_tryUrl.substring(0, 80)}...`);
+                                        await downloadFileChunked(_tryUrl, destPath, {
+                                            onProgress: _mpOnProgress,
+                                            retries: 2,
+                                            abortSignal: abortController.signal,
+                                            timeout: _mpTimeout,
+                                            mirrors: [],
+                                            maxChunks: _maxChunks
+                                        });
+                                        if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) { _dlSuccess = true; console.log(`[Modpack] 下载成功: ${safeName}`); break; }
+                                    } catch (e) {
+                                        if (abortController.signal && abortController.signal.aborted) break;
+                                        console.warn(`[Modpack] 失败 (${_attempt + 1}/3): ${e.message}`);
+                                        if (_attempt < 2) {
+                                            const sRetry = modDownloadSessions.get(sessionId);
+                                            if (sRetry && sRetry.status !== 'cancelled') { sRetry.message = `下载中断，重试中 (${_attempt + 1}/2)...`; }
+                                            await new Promise(r => setTimeout(r, 2000));
+                                        }
+                                    }
                                 }
+                                if (_dlSuccess) break;
                             }
                             clearTimeout(_mpOverallTimer);
 

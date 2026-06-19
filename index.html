@@ -2693,7 +2693,13 @@
                             </div>
                             <div id="memory-custom-settings" style="display: none; margin-top: 8px;">
                                 <div class="vset-slider-wrap">
-                                    <input type="range" id="memory-slider" min="512" max="16384" value="4096" step="256" class="vset-slider" oninput="updateMemoryDisplay()">
+                                    <div style="position: relative; margin-bottom: 8px;">
+                                        <div id="memory-slider-track" style="position: absolute; top: 50%; left: 0; right: 0; height: 6px; background: var(--bg-tertiary); border-radius: 3px; transform: translateY(-50%); pointer-events: none;"></div>
+                                        <div id="memory-slider-fill" style="position: absolute; top: 50%; left: 0; height: 6px; background: linear-gradient(90deg, #4ade80 0%, #fbbf24 70%, #ef4444 100%); border-radius: 3px; transform: translateY(-50%); pointer-events: none; width: 25%;"></div>
+                                        <div id="memory-used-marker" style="position: absolute; top: 50%; width: 2px; height: 14px; background: var(--text-primary); transform: translate(-50%, -50%); pointer-events: none; display: none; z-index: 2;"></div>
+                                        <div id="memory-used-label" style="position: absolute; top: -22px; transform: translateX(-50%); font-size: 11px; color: var(--text-muted); pointer-events: none; display: none; white-space: nowrap; background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">已用</div>
+                                        <input type="range" id="memory-slider" min="512" max="16384" value="4096" step="256" class="vset-slider" oninput="updateMemoryDisplay()">
+                                    </div>
                                     <div class="vset-slider-info">
                                         <span style="font-size: 12px; color: var(--text-muted);">512 MB</span>
                                         <span id="memory-value-display" style="font-weight: 600;">4096 MB (4.0 GB)</span>
@@ -3339,15 +3345,11 @@
 
     <script src="js/utils.js"></script>
     <script src="js/api.js"></script>
-    <script src="js/three.bundle.js"></script>
     <script src="js/wallpaper-engine.js"></script>
-    <link rel="stylesheet" href="css/hljs-theme.min.css">
     <script src="js/marked.min.js"></script>
-    <script src="js/highlight.min.js"></script>
     <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-    <script src="js/ai-chat.js"></script>
-    <script src="js/skinview3d.bundle.js"></script>
+    <script src="js/ai-chat.js" defer></script>
     <script src="js/app.js"></script>
     <script src="js/pcl-slug-map.js" defer></script>
     <script src="js/mod-chinese-names.js" defer></script>

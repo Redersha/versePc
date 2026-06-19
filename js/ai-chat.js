@@ -2948,7 +2948,7 @@ const AIChat = {
                 const activeBtn = document.querySelector('.rc-mode-btn.rc-mode-btn-active');
                 const currentMode = activeBtn ? activeBtn.dataset.mode : 'plan';
                 if (currentMode === 'plan') {
-                    return `\n\n## Mode: Plan (只读探索模式)\n你当前处于 Plan 模式。在此模式下，你只能使用只读工具进行探索和分析，不能执行任何修改操作。\n允许的工具：read_file, grep_search, glob_search, web_search, web_fetch, web_search_general, get_versions, get_installed_mods, get_game_status, search_mods, browse_directory, select_version, get_game_log, diagnose_crash, get_system_info, explore_environment, build_index, semantic_search, index_stats, sequential_thinking, attempt_completion, ask_user, manage_core_memory, update_todo_list, view_history, validate_code, ckg, sub_agent_dispatch\n禁止的工具：write_file, edit_file, bash, execute_command, install_mod, toggle_mod, install_version, install_loader, launch_game, stop_game, manage_settings, translate_mod, install_modpack, agent, str_replace_based_edit_tool, json_edit_tool, download_cfpa_pack, start_preview, manage_processes, undo_edit, add_download_task\n当用户请求修改操作时，提醒他们切换到 Agent 或 Developer 模式。\n输出结构化计划：目标、上下文、关键文件、约束、建议方案、验证计划、风险点。`;
+                    return `\n\n## Mode: Plan (只读探索模式)\n你当前处于 Plan 模式。在此模式下，你只能使用只读工具进行探索和分析，不能执行任何修改操作。\n允许的工具：read_file, grep_search, glob_search, web_search, web_fetch, web_search_general, get_versions, get_installed_mods, get_game_status, search_mods, browse_directory, select_version, get_game_log, diagnose_crash, get_system_info, explore_environment, build_index, semantic_search, index_stats, sequential_thinking, attempt_completion, ask_user, manage_core_memory, update_todo_list, view_history, validate_code, ckg, sub_agent_dispatch, search_translation_dict\n禁止的工具：write_file, edit_file, bash, execute_command, install_mod, toggle_mod, install_version, install_loader, launch_game, stop_game, manage_settings, translate_mod, install_modpack, agent, str_replace_based_edit_tool, json_edit_tool, download_cfpa_pack, extract_builtin_translations, download_modpack_translation, start_preview, manage_processes, undo_edit, add_download_task\n当用户请求修改操作时，提醒他们切换到 Agent 或 Developer 模式。\n输出结构化计划：目标、上下文、关键文件、约束、建议方案、验证计划、风险点。`;
                 }
                 if (currentMode === 'agent') {
                     return `\n\n## Mode: Agent (标准工作模式)\n当前用户处于 Agent 模式。你可以访问 ~/.versepc/versions/ 以及用户已添加的外部版本文件夹。如果用户要求访问其他外部路径，提醒他们切换到 Developer 模式。`;
@@ -2992,10 +2992,11 @@ Analyze intent before acting:
 - NEVER assume which version the user wants. Always use select_version to let them choose.
 - **资源安装流程**: 当用户要求安装模组/光影包/资源包/材质包时，遵循以下步骤:
   1. 搜索资源 (search_mods 或 web_search)
-  2. 调用 select_version 让用户选择目标版本
+  2. 调用 select_version 让用户选择目标版本（版本选择卡片是唯一的版本选择方式）
   3. 用 add_download_task 将下载任务添加到下载管理页面（传入 targetVersionId 为用户选择的版本）
   4. 用 get_download_status 查询进度并告知用户
   taskType 映射: mod=模组, shader=光影包, resourcepack=资源包, texturepack=材质包, modpack=整合包, version=游戏版本
+- **重要**: select_version 版本选择卡片是唯一的版本选择方式。select_version 返回后，直接使用返回的 selected 版本信息。绝对不要在 select_version 之后再用 ask_user 询问版本选择。
 - **下载任务由下载管理页面处理，AI页面不会显示下载进度条**
 
 ## Tool Guidelines
@@ -7581,8 +7582,17 @@ Call attempt_completion when all operations are done and verified.
         }
     },
 
-    _highlightCodeBlocks(container) {
-        if (!container || !window.hljs) return;
+    async _highlightCodeBlocks(container) {
+        if (!container) return;
+        if (!window.hljs) {
+            try {
+                await Promise.all([
+                    _lazyLoadScript('js/highlight.min.js'),
+                    Promise.resolve().then(() => _lazyLoadCSS('css/hljs-theme.min.css'))
+                ]);
+            } catch (e) { return; }
+            if (!window.hljs) return;
+        }
         const blocks = container.querySelectorAll('pre code:not([data-hljs-done])');
         if (blocks.length === 0) return;
         let index = 0;

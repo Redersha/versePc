@@ -1889,8 +1889,11 @@ Take action now. Do not explain your limitations.`
             }
 
             const completionFromTool = toolResults.find(r => r.isCompletion);
-            const completionText = completionFromTool ? completionFromTool.completionText : '';
-            let finalText = roundData.fullContent || completionText || '';
+            let completionText = completionFromTool ? completionFromTool.completionText : '';
+            if (!completionText && !roundData.fullContent) {
+                completionText = this._generateFallbackSummary(conversation, lastUserMsg);
+            }
+            let finalText = completionText || roundData.fullContent || '';
             if (roundData.finishReason === 'length') {
                 finalText += '\n\n> ⚠️ 输出已达到最大 Token 限制，内容可能被截断。如需继续，请发送"继续"。';
             }
@@ -1905,7 +1908,11 @@ Take action now. Do not explain your limitations.`
         }
 
         const finalCompletion = toolResults.find(r => r.isCompletion);
-        this._send({ type: 'say', say: SayType.COMPLETION, text: finalCompletion ? finalCompletion.completionText : '' });
+        let finalCompletionText = finalCompletion ? finalCompletion.completionText : '';
+        if (!finalCompletionText) {
+            finalCompletionText = this._generateFallbackSummary(conversation, lastUserMsg);
+        }
+        this._send({ type: 'say', say: SayType.COMPLETION, text: finalCompletionText });
         if (totalUsage.total_tokens > 0) {
             this._sessionUsage.estimatedCost = estimateCost(this._requestModel || this._model, this._sessionUsage.promptTokens, this._sessionUsage.completionTokens);
             this._send({ type: 'usage', usage: { ...this._sessionUsage } });
@@ -1913,6 +1920,66 @@ Take action now. Do not explain your limitations.`
         this._saveToolAuditLog();
         this._send({ type: 'say', say: SayType.API_FINISHED, text: '' });
     }
+    _generateFallbackSummary(conversation, lastUserMsg) {
+        const meaningfulToolNames = new Set();
+        let toolCallCount = 0;
+        let errorCount = 0;
+        const toolResults = [];
+
+        for (const msg of conversation) {
+            if (msg.role === 'assistant' && msg.tool_calls) {
+                for (const tc of msg.tool_calls) {
+                    const name = tc.function?.name || '';
+                    if (['update_todo_list', 'sequential_thinking', 'attempt_completion'].includes(name)) continue;
+                    meaningfulToolNames.add(name);
+                    toolCallCount++;
+                }
+            }
+            if (msg.role === 'tool') {
+                const content = msg.content || '';
+                if (content.includes('"error"') || content.includes('"status":"error"')) errorCount++;
+                toolResults.push({ name: msg.name, content });
+            }
+        }
+
+        if (meaningfulToolNames.size === 0) return '';
+
+        const lines = [];
+        const toolDisplayNames = [...meaningfulToolNames].map(n => TOOL_DISPLAY_NAMES[n] || n);
+        const toolSummary = toolDisplayNames.join('、');
+        lines.push(`已完成操作：共执行 ${toolCallCount} 次工具调用（${toolSummary}）`);
+
+        const subAgentResults = toolResults.filter(r => r.name === 'sub_agent_dispatch');
+        if (subAgentResults.length > 0) {
+            for (const sr of subAgentResults) {
+                try {
+                    const parsed = JSON.parse(sr.content);
+                    if (parsed.result) {
+                        const resultPreview = parsed.result.length > 200 ? parsed.result.slice(0, 200) + '...' : parsed.result;
+                        lines.push(`子代理结果：${resultPreview}`);
+                    }
+                } catch (e) {}
+            }
+        }
+
+        const bashResults = toolResults.filter(r => r.name === 'bash' || r.name === 'execute_command');
+        const successBash = bashResults.filter(r => !r.content.includes('"error"'));
+        if (successBash.length > 0) {
+            lines.push(`命令执行：${successBash.length} 个命令执行成功`);
+        }
+
+        const fileEdits = toolResults.filter(r => r.name === 'str_replace_based_edit_tool' || r.name === 'json_edit_tool');
+        if (fileEdits.length > 0) {
+            lines.push(`文件操作：${fileEdits.length} 个文件被修改`);
+        }
+
+        if (errorCount > 0) {
+            lines.push(`⚠️ 注意：${errorCount} 个操作遇到问题，如需查看详情请追问`);
+        }
+
+        return lines.join('\n\n');
+    }
+
     // Context Builder
     // =========================================================================
 
@@ -3192,6 +3259,7 @@ Take action now. Do not explain your limitations.`
             apiHeaders: this._apiHeaders,
             enableTools: true,
             enablePlanning: false,
+            approvalMode: 'auto',
             logger: this.logger,
             onChunk: (chunk) => {
                 this._send({ type: 'subagent_chunk', agentType, chunk });

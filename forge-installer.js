@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 const { spawn } = require('child_process');
 
 const args = process.argv.slice(2);
@@ -13,6 +15,12 @@ const LIBS = params.libs;
 const VER_DIR = params.verdir;
 const FORGE_VER = params.forgever;
 const CONFIG = params.config;
+const APP_DIR = params.appdir || '';
+
+let AdmZip;
+try { AdmZip = require('adm-zip'); } catch (_) {
+    try { AdmZip = require(path.join(APP_DIR, 'node_modules', 'adm-zip')); } catch (_) {}
+}
 const LOG_FILE = path.join(ROOT, 'temp', 'forge-installer.log');
 
 const log = (msg) => {
@@ -149,30 +157,128 @@ if (ip.data) {
     }
 }
 
+function downloadFile(url, dest) {
+    return new Promise((resolve, reject) => {
+        try {
+            const dir = path.dirname(dest);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const mod = url.startsWith('https') ? https : http;
+            const req = mod.get(url, { timeout: 60000 }, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    return downloadFile(res.headers.location, dest).then(resolve, reject);
+                }
+                if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}`)); return; }
+                const ws = fs.createWriteStream(dest);
+                res.pipe(ws);
+                ws.on('finish', () => { ws.close(); resolve(); });
+                ws.on('error', (e) => { try { fs.unlinkSync(dest); } catch(_){} reject(e); });
+            });
+            req.on('error', reject);
+            req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        } catch(e) { reject(e); }
+    });
+}
+
+async function downloadMavenArtifact(mavenCoord) {
+    const parts = mavenCoord.split(':');
+    if (parts.length < 3) return false;
+    const groupPath = parts[0].replace(/\./g, '/');
+    const artifact = parts[1];
+    let version = parts[2];
+    let classifier = '';
+    let ext = 'jar';
+    const atIdx = version.indexOf('@');
+    if (atIdx >= 0) { ext = version.substring(atIdx + 1); version = version.substring(0, atIdx); }
+    if (parts[3]) {
+        const atIdx3 = parts[3].indexOf('@');
+        if (atIdx3 >= 0) { classifier = parts[3].substring(0, atIdx3); ext = parts[3].substring(atIdx3 + 1); }
+        else classifier = parts[3];
+    }
+    const fileName = classifier ? `${artifact}-${version}-${classifier}.${ext}` : `${artifact}-${version}.${ext}`;
+    const relativePath = `${groupPath}/${artifact}/${version}/${fileName}`;
+    const dest = path.join(LIBS, relativePath);
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 100) return true;
+    const mirrors = [
+        `https://maven.minecraftforge.net/${relativePath}`,
+        `https://libraries.minecraft.net/${relativePath}`,
+        `https://bmclapi2.bangbang93.com/maven/${relativePath}`,
+    ];
+    for (const url of mirrors) {
+        try {
+            log(`Downloading: ${url}`);
+            await downloadFile(url, dest);
+            if (fs.existsSync(dest) && fs.statSync(dest).size > 100) {
+                log(`Downloaded: ${dest} (${fs.statSync(dest).size} bytes)`);
+                return true;
+            }
+        } catch(e) { log(`Download failed ${url}: ${e.message}`); }
+    }
+    return false;
+}
+
 async function runProcessor(procInfo, index) {
     const { jar, mainClass, classpath: cpNames, args: procArgs } = procInfo;
     log(`\n--- Processor ${index + 1}/${processorsInfo.length}: ${jar} ---`);
     log(`Main-Class: ${mainClass}`);
 
-    const jarPath = resolveMavenPath(jar);
+    let jarPath = resolveMavenPath(jar);
     if (!jarPath || !fs.existsSync(jarPath)) {
-        log(`ERROR: Processor jar not found: ${jarPath}`);
-        return false;
+        log(`Processor jar not found, downloading: ${jar}`);
+        const ok = await downloadMavenArtifact(jar);
+        if (!ok) { log(`ERROR: Failed to download processor jar: ${jar}`); return false; }
+        jarPath = resolveMavenPath(jar);
+        if (!jarPath || !fs.existsSync(jarPath)) { log(`ERROR: Processor jar still not found after download: ${jarPath}`); return false; }
     }
 
-    const classpath = cpNames
-        .map(name => resolveMavenPath(name))
-        .filter(p => p && fs.existsSync(p));
+    let resolvedMainClass = mainClass;
+    if (!resolvedMainClass && jarPath && fs.existsSync(jarPath)) {
+        if (AdmZip) {
+            try {
+                const jarZip = new AdmZip(jarPath);
+                const mf = jarZip.getEntry('META-INF/MANIFEST.MF');
+                if (mf) {
+                    for (const line of mf.getData().toString('utf8').split(/\r?\n/)) {
+                        const t = line.trim();
+                        if (t.startsWith('Main-Class:')) { resolvedMainClass = t.substring('Main-Class:'.length).trim(); break; }
+                    }
+                }
+            } catch(e) { log(`Failed to read Main-Class (adm-zip): ${e.message}`); }
+        }
+        if (!resolvedMainClass) {
+            try {
+                const psScript = `$z=[System.IO.File]::ReadAllBytes('${jarPath.replace(/'/g,"''")}'); $ms=New-Object System.IO.MemoryStream(,$z); $za=New-Object System.IO.Compression.ZipArchive($ms); $e=$za.GetEntry('META-INF/MANIFEST.MF'); if($e){$sr=New-Object System.IO.StreamReader($e.Open()); $c=$sr.ReadToEnd(); $sr.Close(); $c}else{''}; $za.Dispose(); $ms.Dispose()`;
+                const result = require('child_process').execSync(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`, { timeout: 10000, windowsHide: true, encoding: 'utf8' });
+                if (result) {
+                    for (const line of result.split(/\r?\n/)) {
+                        const t = line.trim();
+                        if (t.startsWith('Main-Class:')) { resolvedMainClass = t.substring('Main-Class:'.length).trim(); break; }
+                    }
+                }
+            } catch(e) { log(`Failed to read Main-Class (powershell): ${e.message}`); }
+        }
+    }
+    if (!resolvedMainClass) { log(`ERROR: No Main-Class for processor ${jar}`); return false; }
+
+    const classpath = [];
+    for (const name of cpNames) {
+        let p = resolveMavenPath(name);
+        if (!p || !fs.existsSync(p)) {
+            log(`Classpath jar not found, downloading: ${name}`);
+            await downloadMavenArtifact(name);
+            p = resolveMavenPath(name);
+        }
+        if (p && fs.existsSync(p)) classpath.push(p);
+    }
     classpath.push(jarPath);
     const cpStr = classpath.join(';');
 
     const resolvedArgs = procArgs
         .map(a => normalizeVariable(a, variables, side));
 
-    log(`Command: java -cp <${classpath.length} jars> ${mainClass} <${resolvedArgs.length} args>`);
+    log(`Command: java -cp <${classpath.length} jars> ${resolvedMainClass} <${resolvedArgs.length} args>`);
 
     return new Promise((resolve) => {
-        const child = spawn(javaPath, ['-cp', cpStr, mainClass, ...resolvedArgs], {
+        const child = spawn(javaPath, ['-cp', cpStr, resolvedMainClass, ...resolvedArgs], {
             timeout: 300000,
             encoding: 'utf8',
             windowsHide: true,
