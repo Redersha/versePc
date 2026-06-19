@@ -157,6 +157,37 @@ if (ip.data) {
     }
 }
 
+function extractZipEntry(buf, entryName) {
+    const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    if (eocd < 0) return null;
+    const centralDirOffset = buf.readUInt32LE(eocd + 16);
+    let offset = centralDirOffset;
+    while (offset < eocd) {
+        if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+        const compMethod = buf.readUInt16LE(offset + 10);
+        const compSize = buf.readUInt32LE(offset + 20);
+        const uncompSize = buf.readUInt32LE(offset + 24);
+        const nameLen = buf.readUInt16LE(offset + 28);
+        const extraLen = buf.readUInt16LE(offset + 30);
+        const commentLen = buf.readUInt16LE(offset + 32);
+        const localHeaderOffset = buf.readUInt32LE(offset + 42);
+        const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
+        if (name === entryName) {
+            const lNameLen = buf.readUInt16LE(localHeaderOffset + 26);
+            const dataStart = localHeaderOffset + 30 + lNameLen;
+            const data = buf.slice(dataStart, dataStart + compSize);
+            if (compMethod === 0) return data.toString('utf8');
+            if (compMethod === 8) {
+                const zlib = require('zlib');
+                return zlib.inflateRawSync(data).toString('utf8');
+            }
+            return null;
+        }
+        offset += 46 + nameLen + extraLen + commentLen;
+    }
+    return null;
+}
+
 function downloadFile(url, dest) {
     return new Promise((resolve, reject) => {
         try {
@@ -246,6 +277,18 @@ async function runProcessor(procInfo, index) {
         }
         if (!resolvedMainClass) {
             try {
+                const buf = fs.readFileSync(jarPath);
+                const manifest = extractZipEntry(buf, 'META-INF/MANIFEST.MF');
+                if (manifest) {
+                    for (const line of manifest.split(/\r?\n/)) {
+                        const t = line.trim();
+                        if (t.startsWith('Main-Class:')) { resolvedMainClass = t.substring('Main-Class:'.length).trim(); break; }
+                    }
+                }
+            } catch(e) { log(`Failed to read Main-Class (native-zip): ${e.message}`); }
+        }
+        if (!resolvedMainClass) {
+            try {
                 const psScript = `$z=[System.IO.File]::ReadAllBytes('${jarPath.replace(/'/g,"''")}'); $ms=New-Object System.IO.MemoryStream(,$z); $za=New-Object System.IO.Compression.ZipArchive($ms); $e=$za.GetEntry('META-INF/MANIFEST.MF'); if($e){$sr=New-Object System.IO.StreamReader($e.Open()); $c=$sr.ReadToEnd(); $sr.Close(); $c}else{''}; $za.Dispose(); $ms.Dispose()`;
                 const result = require('child_process').execSync(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`, { timeout: 10000, windowsHide: true, encoding: 'utf8' });
                 if (result) {
@@ -274,6 +317,33 @@ async function runProcessor(procInfo, index) {
 
     const resolvedArgs = procArgs
         .map(a => normalizeVariable(a, variables, side));
+
+    for (const rawArg of procArgs) {
+        const m = rawArg.match(/^\[([^\]]+)\]$/);
+        if (m) {
+            const p = resolveMavenPath(m[1]);
+            if (p && !fs.existsSync(p)) {
+                log(`Data artifact missing, downloading: ${m[1]}`);
+                await downloadMavenArtifact(m[1]);
+            }
+        }
+    }
+
+    for (const arg of resolvedArgs) {
+        if (arg && typeof arg === 'string' && path.isAbsolute(arg) && !fs.existsSync(arg) && /\.(zip|jar|lzma|txt|gz)$/.test(arg)) {
+            const mavenFromArg = procArgs.find(raw => {
+                const p = normalizeVariable(raw, variables, side);
+                return p === arg && raw.startsWith('[');
+            });
+            if (mavenFromArg) {
+                const cm = mavenFromArg.match(/^\[([^\]]+)\]$/);
+                if (cm) {
+                    log(`Input file missing, downloading from Maven: ${cm[1]}`);
+                    await downloadMavenArtifact(cm[1]);
+                }
+            }
+        }
+    }
 
     log(`Command: java -cp <${classpath.length} jars> ${resolvedMainClass} <${resolvedArgs.length} args>`);
 

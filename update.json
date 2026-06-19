@@ -1,13 +1,13 @@
 {
-  "version": "1.2.5",
-  "releaseDate": "2026-06-17T00:00:00Z",
-  "releaseName": "VersePC v1.2.5",
-  "releaseNotes": "## 更新内容\n\nBug 修复：\n- 修复陶瓦联机组件安装失败（文件名匹配规则不识别带版本号的可执行文件）\n- 修复陶瓦联机 API 请求失败（空响应体被误判为 JSON 解析错误）\n- 修复 Fabric 安装模组加载器时页面阻塞（同步下载改为异步）\n- 修复删除版本后文件夹残留（添加删除后验证和强制清理）\n- 修复启动黑屏（窗口等待页面加载完成后再显示）\n\n性能优化：\n- 启动速度大幅优化（server.js 加载、完整性检查、数据修复等全部延迟到窗口显示后）\n- 僵尸进程检测和端口清理改为异步，不再阻塞启动\n- 端口清理从 10 次串行查询合并为 1 次异步查询\n- 陶瓦联机新增 jsDelivr CDN 加速源，国内下载更快\n- Fabric 组件下载从同步改为异步，页面不再卡死\n\n其他：\n- 重要提示文案更新为\"不要使用整合包下载功能\"",
+  "version": "1.3.0",
+  "releaseDate": "2026-06-20T00:00:00Z",
+  "releaseName": "VersePC v1.3.0",
+  "releaseNotes": "## 更新内容\n\nBug 修复：\n- 修复新版 Forge（26.x）被错误重定向到 NeoForge 安装器\n- 修复 NeoForge 安装后版本不显示、继承关系指向错误\n- 修复 Forge 下载进度条回跳、安装失败时残留文件未清理\n- 修复整合包下载后扩展名识别失败、重导入时配置缺失\n- 修复 mrpack 整合包下载慢 + 处理器执行失败\n- 修复整合包下载不兼容模组版本\n- 修复账户详情页布局错乱、启动黑屏闪烁、主题色不生效\n- 修复 GPU 异常页面语法错误导致崩溃\n- 修复删除版本后原版重新出现、模组搜索结果不准确\n\n性能优化：\n- 窗口立即显示，启动体验更快\n- 库文件下载新增 curl 镜像兜底，国内更稳定\n- Forge 版本列表新增多个国内镜像源\n\n新增功能：\n- 整合包下载支持自定义版本名称\n- 陶瓦联机新增公共节点 + 网络诊断 API\n- 集成 PCL 翻译数据库，整合包界面支持中文\n- AI 智能总结增加兜底机制\n- 模组搜索改用内置工具，响应更快",
   "files": {
     "win-x64": {
-      "url": "https://github.com/doujie081231/versePc/releases/download/v1.2.5/VersePC-Setup-1.2.5.exe",
-      "size": 163514991,
-      "sha256": "dfa0aec215cf50631bdbc4cd7f311e88e6b951cb7c9fd181da9519f0f6440153"
+      "url": "https://github.com/doujie081231/versePc/releases/download/v1.3.0/VersePC-Setup-1.3.0.exe",
+      "size": 163826880,
+      "sha256": "6a855eb024795276f2950ee6e7fc80bcd5e562d7c978d3e4927110f68b206ea5"
     }
   }
 }

@@ -259,4 +259,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         },
     },
     platform: process.platform,
+    isAIEnabled: () => {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const cfgPath = path.join(__dirname, 'ai-enabled.json');
+            if (fs.existsSync(cfgPath)) {
+                const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                return cfg.enabled === true;
+            }
+        } catch (_) {}
+        return false;
+    },
 });

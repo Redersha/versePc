@@ -36,7 +36,12 @@ function main() {
 
     const outputPath = path.join(projectRoot, OUTPUT_FILE);
     fs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
-    console.log(`\nIntegrity manifest written to ${OUTPUT_FILE} (${Object.keys(manifest).length} files)`);
+    console.log(`Integrity manifest written to ${OUTPUT_FILE} (${Object.keys(manifest).length} files)`);
+
+    const aiEnabled = process.env.ENABLE_AI === 'true';
+    const aiConfigPath = path.join(projectRoot, 'ai-enabled.json');
+    fs.writeFileSync(aiConfigPath, JSON.stringify({ enabled: aiEnabled }));
+    console.log(`AI config written to ai-enabled.json (enabled=${aiEnabled})`);
 }
 
 main();
