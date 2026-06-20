@@ -14444,9 +14444,11 @@ async function installNeoForge(gameVersion, neoVersion, onProgress = null) {
             versionJsonData.arguments.game = ['--launchTarget', 'neoforgeclient', '--fml.neoForgeVersion', neoVersion, '--fml.mcVersion', gameVersion];
         }
 
+        const mcVerFromId = versionId.match(/^(\d+\.\d+(?:\.\d+)?)/);
+        const cleanMcVer = mcVerFromId ? mcVerFromId[1] : gameVersion.split('.')[0] + '.' + (gameVersion.split('.')[1] || '0');
         const versionJson = {
             id: versionId,
-            inheritsFrom: gameVersion,
+            inheritsFrom: cleanMcVer,
             mainClass: versionJsonData.mainClass || 'cpw.mods.bootstraplauncher.BootstrapLauncher',
             type: 'release',
             libraries: [...versionJsonData.libraries],
@@ -14969,7 +14971,11 @@ async function mergeNeoForgeLoaderToVersion(versionId, gameVersion, neoVersion, 
     const jsonPath = path.join(versionDir, `${versionId}.json`);
     const versionJson = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
 
-    versionJson.inheritsFrom = gameVersion;
+    const correctGameVersion = gameVersion.match(/^\d+\.\d+/) ? gameVersion.split('.')[0] + '.' + gameVersion.split('.').slice(1).find(p => /^\d+$/.test(p) && parseInt(p) < 100) || gameVersion.split('.')[0] + '.' + (gameVersion.split('.')[1] || '0') : gameVersion;
+    const mcVerMatch = versionId.match(/^(\d+\.\d+(?:\.\d+)?)/);
+    const mcVer = mcVerMatch ? mcVerMatch[1] : (versionJson.inheritsFrom && versionJson.inheritsFrom.match(/^\d+\.\d+/) ? versionJson.inheritsFrom : correctGameVersion);
+    versionJson.inheritsFrom = mcVer;
+    console.log(`[NeoForge] inheritsFrom set to: ${mcVer} (gameVersion was: ${gameVersion})`);
 
     let profileLibs = [];
     let profileData = null;
@@ -16837,7 +16843,11 @@ async function _importMrpack(zip, manifestEntry, filePath, progress, targetVersi
             if (versionJson.arguments?.jvm) {
                 versionJson.arguments.jvm = deduplicateJvmArgs(versionJson.arguments.jvm);
             }
-            fs.writeFileSync(path.join(versionDir, `${versionId}.json`), JSON.stringify(versionJson, null, 2));
+            try {
+        const finalJson = JSON.parse(fs.readFileSync(path.join(versionDir, `${versionId}.json`), 'utf-8'));
+        fs.writeFileSync(path.join(versionDir, `${versionId}.json`), JSON.stringify(finalJson, null, 2));
+        console.log(`[NeoForge] Final version JSON written, libs=${(finalJson.libraries||[]).length}`);
+    } catch (_) {}
             _invalidateResolvedJsonCache(versionId);
             console.log(`[mrpack] 创建版本JSON: ${versionId}.json (PCL2式合并, 无inheritsFrom)`);
             try {
