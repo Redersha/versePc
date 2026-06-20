@@ -13258,7 +13258,14 @@ async function installFabric(gameVersion, loaderVersion, onProgress = null) {
                     if (!isJarIntact(libPath)) {
                         const mavenBaseUrl = lib.url || 'https://maven.fabricmc.net/';
                         const downloadUrl = `${mavenBaseUrl}${mavenGroupPath}/${name}/${ver}/${jarName}`;
-                        fabLibsToDownload.push({ lib, url: downloadUrl, libPath });
+                        const altUrls = [];
+                        if (mavenBaseUrl !== 'https://repo1.maven.org/maven2/') {
+                            altUrls.push(`https://repo1.maven.org/maven2/${mavenGroupPath}/${name}/${ver}/${jarName}`);
+                        }
+                        if (mavenBaseUrl !== 'https://maven.fabricmc.net/') {
+                            altUrls.push(`https://maven.fabricmc.net/${mavenGroupPath}/${name}/${ver}/${jarName}`);
+                        }
+                        fabLibsToDownload.push({ lib, url: downloadUrl, libPath, altUrls });
                     }
                 }
             }
@@ -13294,13 +13301,27 @@ async function installFabric(gameVersion, loaderVersion, onProgress = null) {
                             }
                             try { fs.unlinkSync(item.libPath); } catch (_) {}
                         }
-                        await downloadFileWithMirror(item.url, item.libPath);
-                        if (expectedSha1) {
-                            const actual = await calculateSHA1(item.libPath);
-                            if (actual !== expectedSha1) {
-                                try { fs.unlinkSync(item.libPath); } catch (_) {}
-                                throw new Error(`SHA1 mismatch: ${path.basename(item.libPath)}`);
+                        const urlsToTry = [item.url, ...(item.altUrls || [])];
+                        let downloaded = false;
+                        for (const tryUrl of urlsToTry) {
+                            try {
+                                await downloadFileWithMirror(tryUrl, item.libPath);
+                                if (expectedSha1) {
+                                    const actual = await calculateSHA1(item.libPath);
+                                    if (actual !== expectedSha1) {
+                                        try { fs.unlinkSync(item.libPath); } catch (_) {}
+                                        continue;
+                                    }
+                                }
+                                downloaded = true;
+                                break;
+                            } catch (e) {
+                                console.warn(`[Fabric] 下载失败 ${tryUrl}: ${e.message}`);
+                                try { if (fs.existsSync(item.libPath)) fs.unlinkSync(item.libPath); } catch (_) {}
                             }
+                        }
+                        if (!downloaded) {
+                            throw new Error(`所有下载源失败: ${path.basename(item.libPath)}`);
                         }
                     })().then(() => {
                         completed++;
