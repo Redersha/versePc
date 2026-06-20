@@ -175,6 +175,16 @@ function ensureDir(filePath) {
     const dir = path.dirname(filePath);
     if (dirCache.has(dir)) return;
     if (!fs.existsSync(dir)) {
+        const parts = dir.split(path.sep);
+        for (let i = 1; i <= parts.length; i++) {
+            const partial = parts.slice(0, i).join(path.sep);
+            if (partial && fs.existsSync(partial)) {
+                const stat = fs.statSync(partial);
+                if (!stat.isDirectory()) {
+                    try { fs.unlinkSync(partial); } catch (_) {}
+                }
+            }
+        }
         fs.mkdirSync(dir, { recursive: true });
     }
     dirCache.add(dir);
@@ -183,6 +193,18 @@ function ensureDir(filePath) {
 async function asyncEnsureDir(filePath) {
     const dir = path.dirname(filePath);
     if (dirCache.has(dir)) return;
+    const parts = dir.split(path.sep);
+    for (let i = 1; i <= parts.length; i++) {
+        const partial = parts.slice(0, i).join(path.sep);
+        if (partial) {
+            try {
+                const stat = await fs.promises.stat(partial);
+                if (!stat.isDirectory()) {
+                    await fs.promises.unlink(partial);
+                }
+            } catch (_) {}
+        }
+    }
     await fs.promises.mkdir(dir, { recursive: true });
     dirCache.add(dir);
 }
