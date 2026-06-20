@@ -1216,7 +1216,7 @@ function getSystemInfo() {
     const osArch = os.arch();
     let gpuInfo = 'Unknown';
     try {
-        const wmic = execSync('wmic path win32_VideoController get Name,DriverVersion,AdapterRAM /format:csv', { encoding: 'utf8', timeout: 5000, windowsHide: true });
+        const wmic = execSync('chcp 65001 >nul 2>nul && wmic path win32_VideoController get Name,DriverVersion,AdapterRAM /format:csv', { encoding: 'utf8', timeout: 5000, windowsHide: true });
         const lines = wmic.split('\n').filter(l => l.trim() && !l.startsWith('Node'));
         const gpus = lines.map(l => {
             const parts = l.trim().split(',');
@@ -3982,8 +3982,18 @@ function scanExternalFolder(folderPath) {
                 if (inheritsFrom) {
                     const parentJson = _findVersionJsonInAnyDir(inheritsFrom);
                     if (!parentJson) {
-                        error = true;
-                        errorReason = `需要安装 ${inheritsFrom} 作为前置版本`;
+                        const hasMainClass = !!data.mainClass;
+                        const hasLibraries = Array.isArray(data.libraries) && data.libraries.length > 0;
+                        const hasForgeLibs = hasLibraries && data.libraries.some(l => l.name && (
+                            l.name.includes('net.minecraftforge') || l.name.includes('fancymodloader') ||
+                            l.name.includes('net.neoforged') || l.name.includes('fabric-loader')
+                        ));
+                        if ((info.isForge || info.isNeoForge) && (hasMainClass || hasForgeLibs)) {
+                            console.log(`[Versions] 外部Forge版本 ${dir} 缺少前置 ${inheritsFrom}，但自身包含完整配置，视为可用`);
+                        } else {
+                            error = true;
+                            errorReason = `需要安装 ${inheritsFrom} 作为前置版本`;
+                        }
                     }
                 }
                 if (!error && !data.mainClass && (!data.libraries || !Array.isArray(data.libraries) || data.libraries.length === 0)) {
@@ -6551,9 +6561,10 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
         }
         if (neoForgeLib) {
             const fp = neoForgeLib.name.split(':');
+            const cl = fp.length >= 4 ? `-${fp[3]}` : '';
             forgeCoreLibs.push({
                 name: neoForgeLib.name,
-                path: findForgeCoreFile(fp, `${fp[1]}-${fp[2]}.jar`),
+                path: findForgeCoreFile(fp, `${fp[1]}-${fp[2]}${cl}.jar`),
                 desc: 'NeoForge核心'
             });
         }
@@ -6604,6 +6615,7 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
                     if (fs.existsSync(clientDir)) {
                         try {
                             for (const sd of fs.readdirSync(clientDir)) {
+                                if (!sd.startsWith(`${mcVer}-`) && sd !== mcVer) continue;
                                 const fullDir = path.join(clientDir, sd);
                                 try { if (!fs.statSync(fullDir).isDirectory()) continue; } catch (_) { continue; }
                                 const files = fs.readdirSync(fullDir);
@@ -6613,7 +6625,7 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
                                 if (extraFile) forgeCoreLibs.push({ name: `client-extra:${sd}`, path: path.join(fullDir, extraFile), desc: 'Minecraft额外客户端' });
                             }
                         } catch (_) {}
-                        if (forgeCoreLibs.length > 0) break;
+                        break;
                     }
                 }
                 // 新式Forge (1.13+, bootstraplauncher): 检查模块化核心库
@@ -6625,22 +6637,24 @@ async function checkDependencies(versionId, settings, externalVersionDir = null)
                         if (!forgeCoreLibs.some(f => f.path === modPath)) forgeCoreLibs.push({ name: `net.minecraftforge:${modName}:${fmlVersion}`, path: modPath, desc: `Forge模块:${modName}` });
                     }
                 }
-                // Forge patching JARs (client-srg, client-extra, forge-client)
-                forgeCoreLibs.push({ name: `net.minecraftforge:forge:${mcVer}-${fVer}:client`, path: path.join(LIBRARIES_DIR, 'net', 'minecraftforge', 'forge', `${mcVer}-${fVer}`, `forge-${mcVer}-${fVer}-client.jar`), desc: 'Forge客户端核心' });
-                const clientBaseDir = path.join(LIBRARIES_DIR, 'net', 'minecraft', 'client');
-                let mcpDirName = null;
-                try {
-                    if (fs.existsSync(clientBaseDir)) {
-                        const subdirs = fs.readdirSync(clientBaseDir).filter(d => d.startsWith(`${mcVer}-`) && fs.statSync(path.join(clientBaseDir, d)).isDirectory());
-                        if (subdirs.length > 0) mcpDirName = subdirs[0];
+                if (!_depIsNeo) {
+                    // Forge patching JARs (client-srg, client-extra, forge-client) - NeoForge不需要这些
+                    forgeCoreLibs.push({ name: `net.minecraftforge:forge:${mcVer}-${fVer}:client`, path: path.join(LIBRARIES_DIR, 'net', 'minecraftforge', 'forge', `${mcVer}-${fVer}`, `forge-${mcVer}-${fVer}-client.jar`), desc: 'Forge客户端核心' });
+                    const clientBaseDir = path.join(LIBRARIES_DIR, 'net', 'minecraft', 'client');
+                    let mcpDirName = null;
+                    try {
+                        if (fs.existsSync(clientBaseDir)) {
+                            const subdirs = fs.readdirSync(clientBaseDir).filter(d => d.startsWith(`${mcVer}-`) && fs.statSync(path.join(clientBaseDir, d)).isDirectory());
+                            if (subdirs.length > 0) mcpDirName = subdirs[0];
+                        }
+                    } catch (_) {}
+                    if (mcpDirName) {
+                        forgeCoreLibs.push({ name: `net.minecraft:client:${mcpDirName}:srg`, path: path.join(clientBaseDir, mcpDirName, `client-${mcpDirName}-srg.jar`), desc: 'Minecraft SRG映射客户端' });
+                        forgeCoreLibs.push({ name: `net.minecraft:client:${mcpDirName}:extra`, path: path.join(clientBaseDir, mcpDirName, `client-${mcpDirName}-extra.jar`), desc: 'Minecraft额外客户端' });
+                    } else if (!((versionJson.mainClass || '').includes('bootstraplauncher') || (versionJson.mainClass || '').includes('ForgeBootstrap'))) {
+                        forgeCoreLibs.push({ name: `net.minecraft:client:${mcVer}:srg`, path: path.join(clientBaseDir, `${mcVer}-mcp`, `client-${mcVer}-mcp-srg.jar`), desc: 'Minecraft SRG映射客户端' });
+                        forgeCoreLibs.push({ name: `net.minecraft:client:${mcVer}:extra`, path: path.join(clientBaseDir, `${mcVer}-mcp`, `client-${mcVer}-mcp-extra.jar`), desc: 'Minecraft额外客户端' });
                     }
-                } catch (_) {}
-                if (mcpDirName) {
-                    forgeCoreLibs.push({ name: `net.minecraft:client:${mcpDirName}:srg`, path: path.join(clientBaseDir, mcpDirName, `client-${mcpDirName}-srg.jar`), desc: 'Minecraft SRG映射客户端' });
-                    forgeCoreLibs.push({ name: `net.minecraft:client:${mcpDirName}:extra`, path: path.join(clientBaseDir, mcpDirName, `client-${mcpDirName}-extra.jar`), desc: 'Minecraft额外客户端' });
-                } else if (!((versionJson.mainClass || '').includes('bootstraplauncher') || (versionJson.mainClass || '').includes('ForgeBootstrap'))) {
-                    forgeCoreLibs.push({ name: `net.minecraft:client:${mcVer}:srg`, path: path.join(clientBaseDir, `${mcVer}-mcp`, `client-${mcVer}-mcp-srg.jar`), desc: 'Minecraft SRG映射客户端' });
-                    forgeCoreLibs.push({ name: `net.minecraft:client:${mcVer}:extra`, path: path.join(clientBaseDir, `${mcVer}-mcp`, `client-${mcVer}-mcp-extra.jar`), desc: 'Minecraft额外客户端' });
                 }
             }
         }
@@ -7446,8 +7460,19 @@ function getVersionLocalDetails(versionId) {
                         if (findVersionJson(extParentDir)) { foundInExternal = true; break; }
                     }
                     if (!foundInExternal) {
-                        error = true;
-                        errorReason = `需要安装 ${inheritsFrom} 作为前置版本`;
+                        const hasMainClass = !!data.mainClass;
+                        const hasLibraries = Array.isArray(data.libraries) && data.libraries.length > 0;
+                        const hasForgeLibs = hasLibraries && data.libraries.some(l => l.name && (
+                            l.name.includes('net.minecraftforge') || l.name.includes('fancymodloader') ||
+                            l.name.includes('net.neoforged') || l.name.includes('fabric-loader')
+                        ));
+                        const info = detectVersionInfo(data, cleanId);
+                        if ((info.isForge || info.isNeoForge) && (hasMainClass || hasForgeLibs)) {
+                            console.log(`[Versions] 外部Forge版本 ${cleanId} 缺少前置 ${inheritsFrom}，但自身包含完整配置，视为可用`);
+                        } else {
+                            error = true;
+                            errorReason = `需要安装 ${inheritsFrom} 作为前置版本`;
+                        }
                     }
                 }
             }
@@ -11569,6 +11594,32 @@ async function launchGame(versionId, settings, account, checkOnly = false) {
         let forgeRepaired = false;
 
         {
+            const neoMissing = (depCheck.forgeCore.missing || []).filter(m =>
+                m.path && m.path.includes(path.join('net', 'neoforged', 'neoforge')) && path.basename(m.path).includes('universal'));
+            for (const m of neoMissing) {
+                const relPath = path.relative(LIBRARIES_DIR, m.path).replace(/\\/g, '/');
+                const neoMavenBases = [
+                    'https://maven.neoforged.net/releases',
+                    'https://bmclapi2.bangbang93.com/maven'
+                ];
+                let neoOk = false;
+                for (const base of neoMavenBases) {
+                    const url = `${base}/${relPath}`;
+                    try {
+                        if (!fs.existsSync(path.dirname(m.path))) fs.mkdirSync(path.dirname(m.path), { recursive: true });
+                        await downloadFileWithMirror(url, m.path);
+                        if (fs.existsSync(m.path) && isJarIntact(m.path)) { neoOk = true; break; }
+                    } catch (_) {}
+                    try { if (fs.existsSync(m.path) && !isJarIntact(m.path)) fs.unlinkSync(m.path); } catch (_) {}
+                }
+                if (neoOk) {
+                    console.log(`[LaunchGame] NeoForge核心JAR补下载成功: ${path.basename(m.path)}`);
+                    forgeRepaired = true;
+                }
+            }
+        }
+
+        {
             let mvForgeVer = '';
             let mvMcVer = '';
             for (const chainId of [cleanVersionId, versionJson.inheritsFrom].filter(Boolean)) {
@@ -12211,6 +12262,7 @@ async function doLaunch(versionId, versionJson, settings, account, externalVersi
                     const fs = require('fs');
                     const tmpScript = path.join(os.tmpdir(), 'versepc_memopt.ps1');
                     const psScript = `$ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -MemberDefinition '[DllImport("psapi.dll")] public static extern int EmptyWorkingSet(IntPtr hwProc);' -Name "W32PSAPI" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
 Add-Type -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] private static extern int SetSystemInformation(uint infoClass, IntPtr info, uint length);' -Name "W32SysInfo" -Namespace "VP" -WarningAction SilentlyContinue -PassThru | Out-Null
