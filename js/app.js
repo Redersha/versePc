@@ -7166,23 +7166,14 @@ async function loadAccounts() {
                                     retryImg.onload = function() {
                                         homeAvatar.innerHTML = '';
                                         homeAvatar.appendChild(retryImg);
-                                        try {
-                                            const rw = retryImg.naturalWidth || retryImg.width;
-                                            const rh = retryImg.naturalHeight || retryImg.height;
-                                            const rFull = (rw === 64 && (rh === 64 || rh === 32)) || rw === 128 || rw === 256;
-                                            if (rFull) {
-                                                const rCrop = cropSkinHeadCanvas(retryImg, 64);
-                                                if (rCrop) { retryImg.src = rCrop; return; }
-                                            }
-                                            const canvas = document.createElement('canvas');
-                                            canvas.width = 64; canvas.height = 64;
-                                            const ctx = canvas.getContext('2d');
-                                            ctx.drawImage(retryImg, 0, 0, 64, 64);
-                                            const dataUrl = canvas.toDataURL('image/png');
-                                            if (dataUrl && dataUrl.length > 100) {
-                                                localStorage.setItem('cachedAvatarData', dataUrl);
-                                            }
-                                        } catch(e) {}
+                                        const rCanvas = document.createElement('canvas');
+                                        rCanvas.width = 64; rCanvas.height = 64;
+                                        const rCtx = rCanvas.getContext('2d');
+                                        rCtx.drawImage(retryImg, 0, 0, 64, 64);
+                                        const rDataUrl = rCanvas.toDataURL('image/png');
+                                        if (rDataUrl && rDataUrl.length > 100) {
+                                            localStorage.setItem('cachedAvatarData', rDataUrl);
+                                        }
                                     };
                                 }
                             } catch(e) {}
