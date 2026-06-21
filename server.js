@@ -891,7 +891,7 @@ function refreshAvatarCache(cacheKey, cleanUuid, avatarServerUrl, avatarUsername
     } catch (e) {}
     fetchAvatarData(cleanUuid, avatarServerUrl, avatarUsername, storedSkinUrl).then(result => {
         if (result) {
-            AVATAR_CACHE.set(cacheKey, { data: result.data, contentType: result.contentType, time: Date.now() });
+            AVATAR_CACHE.set(cacheKey, { data: result.data, contentType: result.contentType, time: Date.now(), isFullSkin: result.isFullSkin });
             console.log('[Avatar] 后台刷新成功: ' + cacheKey);
         }
     }).catch(e => {
@@ -24003,7 +24003,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                 };
 
                 if (cached) {
-                    serveImage(cached.data, cached.contentType);
+                    serveImage(cached.data, cached.contentType, cached.isFullSkin);
                     if (Date.now() - cached.time > AVATAR_CACHE_DURATION) {
                         refreshAvatarCache(cacheKey, cleanUuid, avatarServerUrl, avatarUsername);
                     }
@@ -24029,7 +24029,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         isFullSkin = false;
                     }
                     if (offlineData) {
-                        AVATAR_CACHE.set(cacheKey, { data: offlineData, contentType: 'image/png', time: Date.now() });
+                        AVATAR_CACHE.set(cacheKey, { data: offlineData, contentType: 'image/png', time: Date.now(), isFullSkin });
                         serveImage(offlineData, 'image/png', isFullSkin);
                     } else {
                         res.writeHead(302, { Location: '/img/steve_head.png' });
@@ -24047,7 +24047,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                     } catch (e) {}
                     const result = await fetchAvatarData(cleanUuid, avatarServerUrl, avatarUsername, storedSkinUrl);
                     if (result) {
-                        AVATAR_CACHE.set(cacheKey, { data: result.data, contentType: result.contentType, time: Date.now() });
+                        AVATAR_CACHE.set(cacheKey, { data: result.data, contentType: result.contentType, time: Date.now(), isFullSkin: result.isFullSkin });
                         serveImage(result.data, result.contentType, result.isFullSkin);
                     } else {
                         const defaultHead = await getSteveHeadLocal();
