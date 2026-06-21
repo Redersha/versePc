@@ -2560,6 +2560,34 @@ function handleWSMessage(ws, msg) {
     }
 }
 
+/*
+[CRITICAL] 启动时清理 libraries 目录下的异常文件
+=================================================
+在整合包导入或模组安装过程中，如果下载中断，可能在 libraries/ 目录下创建一个 0 字节的文件
+（如 libraries/net、libraries/com 等），而不是目录。这会导致后续所有需要在这些路径下创建
+子目录的操作失败（ENOTDIR: not a directory, mkdir）。
+
+这个清理逻辑在应用启动时运行一次，扫描 libraries/ 下的所有条目，如果发现是文件（不是目录）
+就删除它。这样无论用户之前用哪个版本导致了这个问题，更新后都会自动修复。
+
+[AI-AUTOGEN-WARNING] 请勿删除此清理逻辑。
+*/
+if (fs.existsSync(LIBRARIES_DIR)) {
+    try {
+        const entries = fs.readdirSync(LIBRARIES_DIR);
+        for (const entry of entries) {
+            const fullPath = path.join(LIBRARIES_DIR, entry);
+            try {
+                const stat = fs.statSync(fullPath);
+                if (!stat.isDirectory()) {
+                    fs.unlinkSync(fullPath);
+                    console.log(`[Startup] 清理 libraries 下的异常文件: ${entry}`);
+                }
+            } catch (_) {}
+        }
+    } catch (_) {}
+}
+
 [DATA_DIR, VERSIONS_DIR, LIBRARIES_DIR, ASSETS_DIR, NATIVES_DIR, LOGS_DIR, ICON_CACHE_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
