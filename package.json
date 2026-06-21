@@ -10,6 +10,7 @@
     "main": "main.js",
     "scripts": {
         "start": "electron .",
+        "dev": "cross-env NODE_ENV=dev electron .",
         "obfuscate": "node obfuscate-activation.js",
         "build": "npm run obfuscate && node generate-integrity.js && electron-builder --win --linux --mac --publish never",
         "build:win": "npm run obfuscate && node generate-integrity.js && electron-builder --win --publish never",

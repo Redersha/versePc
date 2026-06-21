@@ -630,7 +630,10 @@ async function createWindow() {
             maximized: mainWindow.isMaximized()
         });
 
-        // mainWindow.webContents.openDevTools({ mode: 'detach' });
+        // 开发环境才打开 DevTools
+        if (process.env.NODE_ENV == 'dev') {
+            mainWindow.webContents.openDevTools({ mode: 'detach' });
+        }
     });
 
     // 外部链接在系统浏览器中打开
