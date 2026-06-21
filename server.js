@@ -8718,7 +8718,7 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
         
         updateStatus('configuring', 92, '正在配置Java环境变量...');
         try {
-            configureJavaEnv(targetPath, majorVersion);
+            await configureJavaEnv(targetPath, majorVersion);
             console.log(`[Java] 环境变量配置成功: ${targetPath}`);
         } catch (envErr) {
             console.warn(`[Java] 环境变量配置失败(不影响使用): ${envErr.message}`);
@@ -8765,106 +8765,96 @@ async function downloadJavaAsync(majorVersion, sessionId, sessionFile, mirrorInd
 function configureJavaEnv(javaHome, majorVersion) {
     if (process.platform !== 'win32') {
         console.log('[JavaEnv] 非Windows平台，跳过系统环境变量配置');
-        return { success: false, message: '非Windows平台，跳过环境变量配置' };
+        return Promise.resolve({ success: false, message: '非Windows平台，跳过环境变量配置' });
     }
 
     const javaBinDir = path.join(javaHome, 'bin');
     if (!fs.existsSync(javaBinDir)) {
-        throw new Error(`Java bin目录不存在: ${javaBinDir}`);
+        return Promise.reject(new Error(`Java bin目录不存在: ${javaBinDir}`));
     }
 
-    try {
-        const currentPath = execSync(
-            `powershell -Command "[Environment]::GetEnvironmentVariable('Path', 'Machine')"`,
-            { encoding: 'utf8', timeout: 10000, windowsHide: true }
-        ).trim();
+    const { exec } = require('child_process');
+    const execAsync = (cmd) => new Promise((resolve, reject) => {
+        exec(cmd, { encoding: 'utf8', timeout: 15000, windowsHide: true }, (err, stdout) => {
+            if (err) reject(err); else resolve(stdout.trim());
+        });
+    });
 
-        const pathEntries = currentPath.split(';').filter(p => p.trim() !== '');
+    return (async () => {
         const normalizedJavaBin = javaBinDir.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
-        const alreadyInPath = pathEntries.some(p => 
-            p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '') === normalizedJavaBin
-        );
 
-        if (alreadyInPath) {
-            console.log(`[JavaEnv] ${javaBinDir} 已在系统PATH中，跳过`);
-        } else {
-            const newPath = currentPath.endsWith(';') 
-                ? currentPath + javaBinDir 
-                : currentPath + ';' + javaBinDir;
-            execSync(
-                `powershell -Command "[Environment]::SetEnvironmentVariable('Path', '${newPath.replace(/'/g, "''")}', 'Machine')"`,
-                { encoding: 'utf8', timeout: 15000, windowsHide: true }
+        try {
+            const currentPath = await execAsync(`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path', 'Machine')"`);
+            const pathEntries = currentPath.split(';').filter(p => p.trim() !== '');
+            const alreadyInPath = pathEntries.some(p =>
+                p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '') === normalizedJavaBin
             );
-            console.log(`[JavaEnv] 已将 ${javaBinDir} 添加到系统PATH`);
-        }
 
-        const currentJavaHome = execSync(
-            `powershell -Command "[Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')"`,
-            { encoding: 'utf8', timeout: 10000, windowsHide: true }
-        ).trim();
-
-        const normalizedJavaHome = javaHome.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
-        const currentJavaHomeNorm = currentJavaHome.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
-
-        if (currentJavaHome && currentJavaHomeNorm !== normalizedJavaHome) {
-            const existingMajorMatch = currentJavaHome.match(/jdk[-]?(\d+)/i);
-            const newMajorMatch = javaHome.match(/jdk[-]?(\d+)/i);
-            const existingMajor = existingMajorMatch ? parseInt(existingMajorMatch[1], 10) : 0;
-            const newMajor = newMajorMatch ? parseInt(newMajorMatch[1], 10) : 0;
-
-            if (newMajor >= existingMajor) {
-                execSync(
-                    `powershell -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME', '${javaHome.replace(/'/g, "''")}', 'Machine')"`,
-                    { encoding: 'utf8', timeout: 15000, windowsHide: true }
-                );
-                console.log(`[JavaEnv] 已更新JAVA_HOME: ${javaHome}`);
+            if (alreadyInPath) {
+                console.log(`[JavaEnv] ${javaBinDir} 已在系统PATH中，跳过`);
             } else {
-                console.log(`[JavaEnv] 现有JAVA_HOME(${currentJavaHome})版本更高，保留不变`);
+                const newPath = currentPath.endsWith(';')
+                    ? currentPath + javaBinDir
+                    : currentPath + ';' + javaBinDir;
+                await execAsync(`powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', '${newPath.replace(/'/g, "''")}', 'Machine')"`);
+                console.log(`[JavaEnv] 已将 ${javaBinDir} 添加到系统PATH`);
             }
-        } else if (!currentJavaHome) {
-            execSync(
-                `powershell -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME', '${javaHome.replace(/'/g, "''")}', 'Machine')"`,
-                { encoding: 'utf8', timeout: 15000, windowsHide: true }
-            );
-            console.log(`[JavaEnv] 已设置JAVA_HOME: ${javaHome}`);
+        } catch (e) {
+            console.warn(`[JavaEnv] PATH配置失败(不影响): ${e.message}`);
         }
 
         try {
-            const currentUserPath = execSync(
-                `powershell -Command "[Environment]::GetEnvironmentVariable('Path', 'User')"`,
-                { encoding: 'utf8', timeout: 10000, windowsHide: true }
-            ).trim();
+            const currentJavaHome = await execAsync(`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')"`);
+            const normalizedJavaHome = javaHome.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+            const currentJavaHomeNorm = currentJavaHome.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '');
+
+            if (currentJavaHome && currentJavaHomeNorm !== normalizedJavaHome) {
+                const existingMajorMatch = currentJavaHome.match(/jdk[-]?(\d+)/i);
+                const newMajorMatch = javaHome.match(/jdk[-]?(\d+)/i);
+                const existingMajor = existingMajorMatch ? parseInt(existingMajorMatch[1], 10) : 0;
+                const newMajor = newMajorMatch ? parseInt(newMajorMatch[1], 10) : 0;
+
+                if (newMajor >= existingMajor) {
+                    await execAsync(`powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME', '${javaHome.replace(/'/g, "''")}', 'Machine')"`);
+                    console.log(`[JavaEnv] 已更新JAVA_HOME: ${javaHome}`);
+                } else {
+                    console.log(`[JavaEnv] 现有JAVA_HOME(${currentJavaHome})版本更高，保留不变`);
+                }
+            } else if (!currentJavaHome) {
+                await execAsync(`powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME', '${javaHome.replace(/'/g, "''")}', 'Machine')"`);
+                console.log(`[JavaEnv] 已设置JAVA_HOME: ${javaHome}`);
+            }
+        } catch (e) {
+            console.warn(`[JavaEnv] JAVA_HOME配置失败(不影响): ${e.message}`);
+        }
+
+        try {
+            const currentUserPath = await execAsync(`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path', 'User')"`);
             const userPathEntries = currentUserPath.split(';').filter(p => p.trim() !== '');
-            const inUserPath = userPathEntries.some(p => 
+            const inUserPath = userPathEntries.some(p =>
                 p.toLowerCase().replace(/\\/g, '/').replace(/\/$/, '') === normalizedJavaBin
             );
             if (!inUserPath) {
                 const newUserPath = currentUserPath.endsWith(';')
                     ? currentUserPath + javaBinDir
                     : currentUserPath + ';' + javaBinDir;
-                execSync(
-                    `powershell -Command "[Environment]::SetEnvironmentVariable('Path', '${newUserPath.replace(/'/g, "''")}', 'User')"`,
-                    { encoding: 'utf8', timeout: 15000, windowsHide: true }
-                );
+                await execAsync(`powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', '${newUserPath.replace(/'/g, "''")}', 'User')"`);
                 console.log(`[JavaEnv] 已将 ${javaBinDir} 添加到用户PATH`);
             }
-        } catch (userErr) {
-            console.warn(`[JavaEnv] 用户PATH配置失败(不影响): ${userErr.message}`);
+        } catch (e) {
+            console.warn(`[JavaEnv] 用户PATH配置失败(不影响): ${e.message}`);
         }
 
         try {
             process.env.PATH = javaBinDir + ';' + (process.env.PATH || '');
             process.env.JAVA_HOME = javaHome;
             console.log(`[JavaEnv] 当前进程环境变量已更新`);
-        } catch (procErr) {
-            console.warn(`[JavaEnv] 进程环境变量更新失败: ${procErr.message}`);
+        } catch (e) {
+            console.warn(`[JavaEnv] 进程环境变量更新失败: ${e.message}`);
         }
 
         return { success: true, javaHome: javaHome, binPath: javaBinDir };
-
-    } catch (e) {
-        throw new Error(`环境变量配置失败: ${e.message}`);
-    }
+    })();
 }
 
 function detectBundledJava() {
@@ -27077,7 +27067,7 @@ async function handleAPI(pathname, req, res, parsedUrl) {
                         sendError('Java目录不存在: ' + javaHome, 400);
                         break;
                     }
-                    const result = configureJavaEnv(javaHome, majorVersion || 17);
+                    const result = await configureJavaEnv(javaHome, majorVersion || 17);
                     sendJSON({ success: true, ...result });
                 } catch (e) {
                     sendError('配置环境变量失败: ' + e.message);
