@@ -2717,8 +2717,13 @@ function safeWriteFileSync(filePath, content) {
     const tmpPath = filePath + '.tmp';
     try {
         fs.writeFileSync(tmpPath, content, 'utf8');
+        // Windows: rename cannot overwrite existing file, delete target first
+        if (process.platform === 'win32' && fs.existsSync(filePath)) {
+            try { fs.unlinkSync(filePath); } catch (e) {}
+        }
         fs.renameSync(tmpPath, filePath);
     } catch (e) {
+        console.error(`[safeWriteFileSync] Failed to write ${path.basename(filePath)}: ${e.message}`);
         try { fs.writeFileSync(filePath, content, 'utf8'); } catch (e2) {}
         try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e3) {}
     }
