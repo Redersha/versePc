@@ -48,6 +48,7 @@
         "files": [
             "main.js",
             "server.js",
+            "server/**/*",
             "neoforge-processor.js",
             "forge-processor.js",
             "forge-installer.js",
