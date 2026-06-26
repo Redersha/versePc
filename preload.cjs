@@ -128,6 +128,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readFileBuffer: (filePath) => ipcRenderer.invoke('read-file-buffer', filePath),
     activateVerify: (code) => ipcRenderer.invoke('activate-verify', code),
     activateStatus: () => ipcRenderer.invoke('activate-status'),
+    themeActivateVerify: (code) => ipcRenderer.invoke('theme-activate-verify', code),
+    themeActivateStatus: () => ipcRenderer.invoke('theme-activate-status'),
     store: {
         get: (key) => ipcRenderer.invoke('store-get', key),
         getMultiple: (keys) => ipcRenderer.invoke('store-get-multiple', keys),

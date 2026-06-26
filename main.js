@@ -1161,6 +1161,95 @@ ipcMain.handle('activate-status', async () => {
     };
 });
 
+ipcMain.handle('theme-activate-verify', async (event, code) => {
+    try {
+        const crypto = require('crypto');
+        const requestJson = (url, body) => new Promise((resolve, reject) => {
+            try {
+                const payload = JSON.stringify(body);
+                const { net } = require('electron');
+                const req = net.request({ url, method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                req.on('response', (res) => {
+                    let text = '';
+                    res.on('data', (chunk) => text += chunk.toString());
+                    res.on('end', () => {
+                        try {
+                            if (res.statusCode < 200 || res.statusCode >= 300) {
+                                return reject(new Error('服务端错误: ' + res.statusCode));
+                            }
+                            resolve(JSON.parse(text || '{}'));
+                        } catch (e) {
+                            reject(new Error('解析服务端响应失败'));
+                        }
+                    });
+                });
+                req.on('error', (err) => reject(err));
+                req.write(payload);
+                req.end();
+            } catch (err) { reject(err); }
+        });
+
+        const parts = [];
+        try { parts.push(os.hostname()); } catch (e) {}
+        try { parts.push(os.arch()); } catch (e) {}
+        try { parts.push(os.platform()); } catch (e) {}
+        try { const cpus = os.cpus(); if (cpus.length > 0) parts.push(cpus[0].model); } catch (e) {}
+        try { parts.push(String(os.totalmem())); } catch (e) {}
+        try {
+            const nets = os.networkInterfaces();
+            for (const name of Object.keys(nets)) {
+                for (const iface of nets[name]) {
+                    if (!iface.internal && iface.mac && iface.mac !== '00:00:00:00:00:00') { parts.push(iface.mac); break; }
+                }
+            }
+        } catch (e) {}
+        const machineId = crypto.createHash('sha256').update(parts.join('|')).digest('hex').toUpperCase().substring(0, 16);
+
+        let c = (code || '').trim().toUpperCase();
+        if (!c) return { success: false, message: '请输入激活码' };
+        const codeMatch = c.match(/(VT-[A-F0-9]{6,12})/i);
+        if (codeMatch) c = codeMatch[1].toUpperCase();
+        if (!c.startsWith('VT-')) return { success: false, message: '请输入麦香主题激活码（VT-开头）' };
+
+        const baseUrl = 'https://www.verselauncher.cn';
+        const endpoints = [baseUrl + '/api/activate/verify', baseUrl + '/.netlify/functions/activate/verify', baseUrl + '/functions/api/activate/verify'];
+
+        let data = null;
+        let lastErr = null;
+        const body = { activation_code: c, machine_id: machineId, app_version: app.getVersion() };
+        for (const url of endpoints) {
+            try {
+                const json = await requestJson(url, body);
+                data = json?.data || json;
+                lastErr = null;
+                break;
+            } catch (err) { lastErr = err.message || '网络异常'; }
+        }
+
+        if (!data || !data.activated) {
+            return { success: false, message: lastErr ? ('激活验证失败: ' + lastErr) : '激活码无效或与本机不匹配' };
+        }
+
+        const store = loadStore();
+        store['theme_activation_code'] = c;
+        store['theme_activation_time'] = new Date().toISOString();
+        fs.writeFile(STORE_PATH, JSON.stringify(store, null, 2), () => {});
+
+        return { success: true, message: '麦香主题已解锁' };
+    } catch (e) {
+        return { success: false, message: '验证过程出错: ' + e.message };
+    }
+});
+
+ipcMain.handle('theme-activate-status', async () => {
+    const store = loadStore();
+    return {
+        activated: !!store['theme_activation_code'],
+        code: store['theme_activation_code'] || null,
+        time: store['theme_activation_time'] || null
+    };
+});
+
     ipcMain.handle('preview:stop', async () => {
         if (global._previewServer) {
             global._previewServer.close();
